@@ -77,7 +77,10 @@ function openGitVisualization(context: vscode.ExtensionContext) {
 					showCommitDetails(message.commit);
 					break;
 				case 'showAuthorDetails':
-					showAuthorDetails(message.author);
+					showAuthorDetails(message.author, message.authorEmail);
+					break;
+				case 'showCommitMessageDetails':
+					showCommitMessageDetails(message.commit);
 					break;
 			}
 		},
@@ -235,8 +238,125 @@ function showCommitDetails(commit: any) {
 	`;
 }
 
-function showAuthorDetails(author: string) {
-	vscode.window.showInformationMessage(`Author: ${author}`);
+function showAuthorDetails(author: string, authorEmail: string) {
+	const message = vscode.window.createWebviewPanel(
+		'authorDetails',
+		`Author: ${author}`,
+		vscode.ViewColumn.Two,
+		{ enableScripts: true }
+	);
+
+	message.webview.html = `
+		<!DOCTYPE html>
+		<html>
+		<head>
+			<meta charset="UTF-8">
+			<meta name="viewport" content="width=device-width, initial-scale=1.0">
+			<title>Author Details</title>
+			<style>
+				body {
+					font-family: var(--vscode-font-family);
+					font-size: var(--vscode-font-size);
+					color: var(--vscode-foreground);
+					background-color: var(--vscode-editor-background);
+					padding: 20px;
+				}
+				.author-header {
+					border-bottom: 1px solid var(--vscode-panel-border);
+					padding-bottom: 15px;
+					margin-bottom: 20px;
+				}
+				.author-name {
+					font-size: 18px;
+					font-weight: bold;
+					margin-bottom: 10px;
+				}
+				.author-email {
+					color: var(--vscode-descriptionForeground);
+					font-size: 14px;
+				}
+			</style>
+		</head>
+		<body>
+			<div class="author-header">
+				<div class="author-name">${author}</div>
+				<div class="author-email">${authorEmail}</div>
+			</div>
+			<p>This author has contributed to this repository.</p>
+		</body>
+		</html>
+	`;
+}
+
+function showCommitMessageDetails(commit: any) {
+	const message = vscode.window.createWebviewPanel(
+		'commitMessageDetails',
+		`Commit Message: ${commit.shortHash}`,
+		vscode.ViewColumn.Two,
+		{ enableScripts: true }
+	);
+
+	message.webview.html = `
+		<!DOCTYPE html>
+		<html>
+		<head>
+			<meta charset="UTF-8">
+			<meta name="viewport" content="width=device-width, initial-scale=1.0">
+			<title>Commit Message Details</title>
+			<style>
+				body {
+					font-family: var(--vscode-font-family);
+					font-size: var(--vscode-font-size);
+					color: var(--vscode-foreground);
+					background-color: var(--vscode-editor-background);
+					padding: 20px;
+				}
+				.commit-header {
+					border-bottom: 1px solid var(--vscode-panel-border);
+					padding-bottom: 15px;
+					margin-bottom: 20px;
+				}
+				.commit-hash {
+					font-family: monospace;
+					background-color: var(--vscode-textCodeBlock-background);
+					padding: 4px 8px;
+					border-radius: 4px;
+					display: inline-block;
+					margin-bottom: 10px;
+				}
+				.commit-message {
+					font-size: 16px;
+					font-weight: bold;
+					margin-bottom: 10px;
+				}
+				.commit-author {
+					color: var(--vscode-descriptionForeground);
+					margin-bottom: 5px;
+				}
+				.commit-date {
+					color: var(--vscode-descriptionForeground);
+					font-size: 12px;
+				}
+				.commit-body {
+					white-space: pre-wrap;
+					background-color: var(--vscode-textCodeBlock-background);
+					padding: 15px;
+					border-radius: 4px;
+					margin-top: 15px;
+				}
+			</style>
+		</head>
+		<body>
+			<div class="commit-header">
+				<div class="commit-hash">${commit.hash}</div>
+				<div class="commit-message">${commit.message}</div>
+				<div class="commit-author">${commit.author} &lt;${commit.authorEmail}&gt;</div>
+				<div class="commit-date">${commit.date}</div>
+			</div>
+			<div class="commit-body">${commit.fullMessage}</div>
+		</body>
+		</html>
+	`;
 }
 
 function getWebviewContent() {
@@ -478,6 +598,49 @@ function getWebviewContent() {
                             vscode.postMessage({
                                 command: 'showCommitDetails',
                                 commit: commit
+                            });
+                        }
+                    }
+                });
+            });
+            
+            // Add click handlers to clickable authors
+            const authors = container.querySelectorAll('.clickable-author');
+            authors.forEach(author => {
+                author.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent triggering commit node click
+                    const authorName = e.target.getAttribute('data-author');
+                    const authorEmail = e.target.getAttribute('data-author-email');
+                    if (authorName) {
+                        vscode.postMessage({
+                            command: 'showAuthorDetails',
+                            author: authorName,
+                            authorEmail: authorEmail || ''
+                        });
+                    }
+                });
+            });
+            
+            // Add click handlers to clickable messages
+            const messages = container.querySelectorAll('.clickable-message');
+            messages.forEach(message => {
+                message.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent triggering commit node click
+                    const hash = e.target.getAttribute('data-hash');
+                    const messageText = e.target.getAttribute('data-message');
+                    const fullMessage = e.target.getAttribute('data-full-message');
+                    if (hash && currentData) {
+                        const commit = currentData.commits.find(c => c.hash === hash);
+                        if (commit) {
+                            // Override the message with the clicked message data
+                            const messageCommit = {
+                                ...commit,
+                                message: messageText,
+                                fullMessage: fullMessage
+                            };
+                            vscode.postMessage({
+                                command: 'showCommitMessageDetails',
+                                commit: messageCommit
                             });
                         }
                     }

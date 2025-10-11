@@ -116,7 +116,7 @@ dist
 
 # VS Code Extension specific
 out/
-*.vsix
+# *.vsix
 .vscode-test/
 .vscode-test-web/
 
@@ -140,6 +140,4 @@ Thumbs.db
 *.tmp
 *.temp
 
-out/
 .cursor/
-*.vsix

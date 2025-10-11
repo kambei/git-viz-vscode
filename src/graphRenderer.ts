@@ -31,7 +31,8 @@ export class HorizontalGraphRenderer {
     private readonly PADDING = { top: 96, right: 64, bottom: 96, left: 64 };
 
     constructor(commits: GitCommit[]) {
-        this.commits = commits;
+        // Reverse commits to show newest first (left to right)
+        this.commits = [...commits].reverse();
         this.assignLanes();
         this.createNodes();
         this.createEdges();
@@ -55,8 +56,9 @@ export class HorizontalGraphRenderer {
             }
         }
 
-        // Second pass: propagate branch assignments backwards through first-parent chains
-        for (let i = this.commits.length - 1; i >= 0; i--) {
+        // Second pass: propagate branch assignments forwards through first-parent chains
+        // Since commits are now in reverse chronological order, we propagate forwards
+        for (let i = 0; i < this.commits.length; i++) {
             const commit = this.commits[i];
             const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
             
@@ -64,9 +66,9 @@ export class HorizontalGraphRenderer {
                 const branchName = branchRefs[0].replace('Branch ', '');
                 this.laneAssignments.set(commit.hash, branchLanes.get(branchName) || 0);
                 
-                // Propagate backwards through first parent
+                // Propagate forwards through first parent (which is now to the right)
                 if (commit.parents.length > 0) {
-                    this.propagateBranchBackwards(commit.parents[0], branchLanes.get(branchName) || 0);
+                    this.propagateBranchForwards(commit.parents[0], branchLanes.get(branchName) || 0);
                 }
             }
         }
@@ -86,7 +88,7 @@ export class HorizontalGraphRenderer {
         }
     }
 
-    private propagateBranchBackwards(parentHash: string, lane: number): void {
+    private propagateBranchForwards(parentHash: string, lane: number): void {
         const parentIndex = this.commits.findIndex(c => c.hash.startsWith(parentHash));
         if (parentIndex !== -1 && !this.laneAssignments.has(this.commits[parentIndex].hash)) {
             this.laneAssignments.set(this.commits[parentIndex].hash, lane);
@@ -94,7 +96,7 @@ export class HorizontalGraphRenderer {
             // Continue propagating if this commit has a first parent
             const parentCommit = this.commits[parentIndex];
             if (parentCommit.parents.length > 0) {
-                this.propagateBranchBackwards(parentCommit.parents[0], lane);
+                this.propagateBranchForwards(parentCommit.parents[0], lane);
             }
         }
     }
@@ -138,9 +140,10 @@ export class HorizontalGraphRenderer {
                 const parentNode = this.nodes.find(n => n.commit.hash.startsWith(parentHash));
                 
                 if (parentNode) {
+                    // Since commits are now in reverse order, edges go from child (left) to parent (right)
                     this.edges.push({
-                        from: node,
-                        to: parentNode,
+                        from: node,      // Child (newer commit, on the left)
+                        to: parentNode, // Parent (older commit, on the right)
                         color: i === 0 ? node.color : parentNode.color // First parent uses child color
                     });
                 }
@@ -173,15 +176,26 @@ export class HorizontalGraphRenderer {
                             font-size: 11px;
                             text-anchor: middle;
                         }
-                        .commit-author {
-                            fill: var(--vscode-descriptionForeground);
-                            font-size: 10px;
-                            text-anchor: middle;
+                        .clickable-author {
+                            fill: var(--vscode-textLink-foreground);
+                            cursor: pointer;
+                            text-decoration: underline;
+                        }
+                        .clickable-author:hover {
+                            fill: var(--vscode-textLink-activeForeground);
                         }
                         .commit-message {
                             fill: var(--vscode-foreground);
                             font-size: 10px;
                             text-anchor: middle;
+                        }
+                        .clickable-message {
+                            fill: var(--vscode-textLink-foreground);
+                            cursor: pointer;
+                            text-decoration: underline;
+                        }
+                        .clickable-message:hover {
+                            fill: var(--vscode-textLink-activeForeground);
                         }
                         .ref-badge {
                             fill: var(--vscode-button-background);
@@ -232,21 +246,24 @@ export class HorizontalGraphRenderer {
                     class="commit-node" data-hash="${commit.hash}"/>
         `;
 
-        // Render SHA and author above the node
+        // Render SHA and clickable author above the node
         const sha = commit.shortHash;
         const author = commit.author || 'Unknown';
-        const topText = `${sha} · ${author}`;
         
         svg += `
             <text x="${x}" y="${y - this.NODE_RADIUS - 8}" class="commit-text">
-                ${this.truncateText(topText, 20)}
+                ${sha} · 
+                <tspan class="clickable-author" data-hash="${commit.hash}" data-author="${author}" data-author-email="${commit.authorEmail}">
+                    ${this.truncateText(author, 15)}
+                </tspan>
             </text>
         `;
 
-        // Render commit message below the node
+        // Render clickable commit message below the node
         const message = commit.message || '';
         svg += `
-            <text x="${x}" y="${y + this.NODE_RADIUS + 15}" class="commit-message">
+            <text x="${x}" y="${y + this.NODE_RADIUS + 15}" class="commit-message clickable-message" 
+                  data-hash="${commit.hash}" data-message="${message}" data-full-message="${commit.fullMessage}">
                 ${this.truncateText(message, 25)}
             </text>
         `;
