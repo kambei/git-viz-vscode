@@ -87,7 +87,7 @@
         {
           "id": "git-viz",
           "title": "Git Viz",
-          "icon": "media/activity-icon.png"
+          "icon": "media/git-viz-activity.svg"
         }
       ]
     }
