@@ -77,15 +77,6 @@ The extension automatically detects git repositories and provides visualization 
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Roadmap
-
-- [ ] Interactive commit graph
-- [ ] Branch comparison tools
-- [ ] File diff visualization
-- [ ] Custom themes and layouts
-- [ ] Export functionality
-- [ ] Integration with GitLens
-
 ## Support
 
 If you encounter any issues or have feature requests, please open an issue on GitHub.
