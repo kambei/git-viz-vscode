@@ -3,6 +3,8 @@
   "displayName": "Git Viz",
   "description": "Horizontal Git repository visualization for VS Code",
   "version": "0.0.1",
+  "publisher": "kambei",
+  "icon": "media/main-icon.png",
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -10,10 +12,18 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:git-viz.open"
+    "onCommand:git-viz.open",
+    "workspaceContains:.git"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "iconThemes": [
+      {
+        "id": "git-viz-icons",
+        "label": "Git Viz Icons",
+        "path": "./media/icons.json"
+      }
+    ],
     "commands": [
       {
         "command": "git-viz.open",
@@ -67,7 +77,17 @@
       "git-viz": [
         {
           "id": "git-viz-view",
-          "name": "Git Visualization"
+          "name": "Git Visualization",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "git-viz",
+          "title": "Git Viz",
+          "icon": "media/activity-icon.png"
         }
       ]
     }
@@ -81,8 +101,8 @@
     "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.74.0",
     "@types/node": "16.x",
+    "@types/vscode": "^1.74.0",
     "@typescript-eslint/eslint-plugin": "^5.45.0",
     "@typescript-eslint/parser": "^5.45.0",
     "eslint": "^8.28.0",
@@ -90,7 +110,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/git-viz-vscode.git"
+    "url": "https://github.com/kambei/git-viz-vscode.git"
   },
   "keywords": [
     "git",
@@ -98,8 +118,9 @@
     "vscode",
     "extension",
     "horizontal",
-    "graph"
+    "graph",
+    "kambei"
   ],
-  "author": "Your Name",
+  "author": "kambei",
   "license": "MIT"
 }

@@ -1,0 +1,29 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="128" height="128" rx="20" fill="#1A73E8"/>
+  
+  <!-- Horizontal timeline -->
+  <line x1="20" y1="64" x2="108" y2="64" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+  
+  <!-- Branch lines -->
+  <line x1="40" y1="32" x2="40" y2="96" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+  <line x1="88" y1="32" x2="88" y2="96" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+  
+  <!-- Commit nodes -->
+  <circle cx="40" cy="64" r="8" fill="#FFFFFF"/>
+  <circle cx="88" cy="64" r="8" fill="#FFFFFF"/>
+  <circle cx="40" cy="32" r="6" fill="#FFFFFF"/>
+  <circle cx="40" cy="96" r="6" fill="#FFFFFF"/>
+  <circle cx="88" cy="32" r="6" fill="#FFFFFF"/>
+  <circle cx="88" cy="96" r="6" fill="#FFFFFF"/>
+  
+  <!-- Merge curves -->
+  <path d="M40 32 Q64 32, 88 32" stroke="#FFFFFF" stroke-width="3" fill="none"/>
+  <path d="M40 96 Q64 96, 88 96" stroke="#FFFFFF" stroke-width="3" fill="none"/>
+  
+  <!-- Additional commits -->
+  <circle cx="64" cy="32" r="4" fill="#FFFFFF"/>
+  <circle cx="64" cy="96" r="4" fill="#FFFFFF"/>
+  <circle cx="52" cy="64" r="3" fill="#FFFFFF"/>
+  <circle cx="76" cy="64" r="3" fill="#FFFFFF"/>
+</svg>

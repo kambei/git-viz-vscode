@@ -1,0 +1,49 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background with gradient -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1A73E8;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0D47A1;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="nodeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#E3F2FD;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Main background -->
+  <rect width="128" height="128" rx="20" fill="url(#bgGradient)"/>
+  
+  <!-- Horizontal timeline (main trunk) -->
+  <line x1="20" y1="64" x2="108" y2="64" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+  
+  <!-- Branch lines -->
+  <line x1="40" y1="32" x2="40" y2="96" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+  <line x1="88" y1="32" x2="88" y2="96" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+  
+  <!-- Commit nodes on main timeline -->
+  <circle cx="40" cy="64" r="8" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="2"/>
+  <circle cx="88" cy="64" r="8" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="2"/>
+  
+  <!-- Branch commit nodes -->
+  <circle cx="40" cy="32" r="6" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="2"/>
+  <circle cx="40" cy="96" r="6" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="2"/>
+  <circle cx="88" cy="32" r="6" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="2"/>
+  <circle cx="88" cy="96" r="6" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="2"/>
+  
+  <!-- Merge curves -->
+  <path d="M40 32 Q64 32, 88 32" stroke="#FFFFFF" stroke-width="3" fill="none"/>
+  <path d="M40 96 Q64 96, 88 96" stroke="#FFFFFF" stroke-width="3" fill="none"/>
+  
+  <!-- Additional commit nodes on curves -->
+  <circle cx="64" cy="32" r="4" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="1"/>
+  <circle cx="64" cy="96" r="4" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="1"/>
+  
+  <!-- Small intermediate commits -->
+  <circle cx="52" cy="64" r="3" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="1"/>
+  <circle cx="76" cy="64" r="3" fill="url(#nodeGradient)" stroke="#FFFFFF" stroke-width="1"/>
+  
+  <!-- Git branch indicators -->
+  <path d="M20 64 L32 56 L32 72 Z" fill="#FFFFFF" opacity="0.8"/>
+  <path d="M108 64 L96 56 L96 72 Z" fill="#FFFFFF" opacity="0.8"/>
+</svg>

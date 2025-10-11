@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const execAsync = promisify(exec);
 
@@ -46,59 +48,77 @@ export class GitService {
     async getCommits(filters: GitFilters = {}): Promise<GitCommit[]> {
         try {
             const maxCommits = filters.maxCommits || 500;
-            const maxBranches = filters.maxBranches || 20;
             
-            // Get latest branches first
-            const branches = await this.getBranches();
-            const latestBranches = branches.slice(0, maxBranches);
+            console.log('Getting commits from git folder:', this.workspaceRoot);
+            console.log('Filters:', filters);
             
-            // Build git log command
-            let command = `git log --oneline --graph --decorate --all --max-count=${maxCommits}`;
-            
-            // Add branch filter if specified
-            if (filters.branch) {
-                command = `git log --oneline --graph --decorate --max-count=${maxCommits} origin/${filters.branch} || git log --oneline --graph --decorate --max-count=${maxCommits} ${filters.branch}`;
+            // Check if we're in a git repository
+            if (!await this.isGitRepository()) {
+                console.log('Not a git repository');
+                return [];
             }
             
-            // Add author filter
+            // Build git log command with structured output
+            let command = `git log --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P" --max-count=${maxCommits}`;
+            
+            // Add filters
+            if (filters.branch) {
+                command += ` ${filters.branch}`;
+            }
+            
             if (filters.author) {
                 command += ` --author="${filters.author}"`;
             }
             
-            // Add message filter
             if (filters.message) {
                 command += ` --grep="${filters.message}"`;
             }
             
-            // Add tag filter
-            if (filters.tag) {
-                command += ` --grep="${filters.tag}"`;
+            console.log('Executing git command:', command);
+            
+            const { stdout, stderr } = await execAsync(command, { 
+                cwd: this.workspaceRoot,
+                encoding: 'utf8'
+            });
+            
+            if (stderr) {
+                console.warn('Git command stderr:', stderr);
             }
-
-            const { stdout } = await execAsync(command, { cwd: this.workspaceRoot });
             
-            // Parse git log output
-            const commits = this.parseGitLog(stdout);
+            console.log('Git log output length:', stdout.length);
             
-            // Get detailed commit information
-            const detailedCommits = await Promise.all(
-                commits.map(async (commit) => {
-                    const details = await this.getCommitDetails(commit.hash);
-                    return {
-                        hash: commit.hash,
-                        shortHash: commit.shortHash,
-                        author: details.author || 'Unknown',
-                        authorEmail: details.authorEmail || '',
-                        message: details.message || '',
-                        fullMessage: details.fullMessage || '',
-                        date: details.date || new Date(),
-                        parents: details.parents || [],
-                        refs: details.refs || []
-                    } as GitCommit;
-                })
-            );
-
-            return detailedCommits;
+            const commits: GitCommit[] = [];
+            const lines = stdout.trim().split('\n');
+            
+            for (const line of lines) {
+                if (line.trim()) {
+                    const parts = line.split('|');
+                    if (parts.length >= 7) {
+                        try {
+                            const commit: GitCommit = {
+                                hash: parts[0].trim(),
+                                shortHash: parts[1].trim(),
+                                author: parts[2].trim(),
+                                authorEmail: parts[3].trim(),
+                                message: parts[4].trim(),
+                                fullMessage: parts[4].trim(), // Same as message for now
+                                date: new Date(parts[5].trim()),
+                                parents: parts[6].trim() ? parts[6].trim().split(' ') : [],
+                                refs: []
+                            };
+                            commits.push(commit);
+                        } catch (error) {
+                            console.warn('Error parsing commit line:', line, error);
+                        }
+                    } else {
+                        console.warn('Invalid commit line format:', line);
+                    }
+                }
+            }
+            
+            console.log('Successfully parsed commits:', commits.length);
+            return commits;
+            
         } catch (error) {
             console.error('Error getting commits:', error);
             return [];
@@ -107,23 +127,46 @@ export class GitService {
 
     async getBranches(): Promise<GitBranch[]> {
         try {
-            const { stdout } = await execAsync('git branch -a --sort=-committerdate', { cwd: this.workspaceRoot });
-            const branches: GitBranch[] = [];
+            console.log('Getting branches from git folder...');
             
-            stdout.split('\n').forEach(line => {
-                const trimmed = line.trim();
-                if (trimmed) {
-                    const isCurrent = trimmed.startsWith('*');
-                    const name = trimmed.replace(/^\*\s*/, '').replace(/^remotes\/origin\//, '');
-                    branches.push({
-                        name,
-                        isCurrent,
-                        lastCommit: '' // Will be filled later
-                    });
-                }
+            if (!await this.isGitRepository()) {
+                console.log('Not a git repository');
+                return [];
+            }
+            
+            const { stdout, stderr } = await execAsync('git branch -a --sort=-committerdate', { 
+                cwd: this.workspaceRoot,
+                encoding: 'utf8'
             });
             
+            if (stderr) {
+                console.warn('Git branch stderr:', stderr);
+            }
+            
+            console.log('Git branch output:', stdout);
+            
+            const branches: GitBranch[] = [];
+            const lines = stdout.split('\n');
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed && !trimmed.startsWith('remotes/origin/HEAD')) {
+                    const isCurrent = trimmed.startsWith('*');
+                    const name = trimmed.replace(/^\*\s*/, '').replace(/^remotes\/origin\//, '');
+                    
+                    if (name && !name.includes('->')) {
+                        branches.push({
+                            name,
+                            isCurrent,
+                            lastCommit: '' // We'll get this separately if needed
+                        });
+                    }
+                }
+            }
+            
+            console.log('Processed branches:', branches);
             return branches;
+            
         } catch (error) {
             console.error('Error getting branches:', error);
             return [];
@@ -132,20 +175,48 @@ export class GitService {
 
     async getTags(): Promise<GitTag[]> {
         try {
-            const { stdout } = await execAsync('git tag --sort=-version:refname', { cwd: this.workspaceRoot });
-            const tags: GitTag[] = [];
+            console.log('Getting tags from git folder...');
             
-            stdout.split('\n').forEach(line => {
-                const trimmed = line.trim();
-                if (trimmed) {
-                    tags.push({
-                        name: trimmed,
-                        commit: '' // Will be filled later
-                    });
-                }
+            if (!await this.isGitRepository()) {
+                console.log('Not a git repository');
+                return [];
+            }
+            
+            const { stdout, stderr } = await execAsync('git tag --sort=-creatordate', { 
+                cwd: this.workspaceRoot,
+                encoding: 'utf8'
             });
             
+            if (stderr) {
+                console.warn('Git tag stderr:', stderr);
+            }
+            
+            console.log('Git tags output:', stdout);
+            
+            const tags: GitTag[] = [];
+            const lines = stdout.split('\n');
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed) {
+                    try {
+                        const { stdout: commitHash } = await execAsync(`git rev-parse ${trimmed}`, { 
+                            cwd: this.workspaceRoot,
+                            encoding: 'utf8'
+                        });
+                        tags.push({
+                            name: trimmed,
+                            commit: commitHash.trim()
+                        });
+                    } catch (error) {
+                        console.warn(`Could not get commit for tag ${trimmed}:`, error);
+                    }
+                }
+            }
+            
+            console.log('Processed tags:', tags);
             return tags;
+            
         } catch (error) {
             console.error('Error getting tags:', error);
             return [];
@@ -154,83 +225,64 @@ export class GitService {
 
     async getAuthors(): Promise<string[]> {
         try {
-            const { stdout } = await execAsync('git log --pretty=format:"%an" | sort | uniq', { cwd: this.workspaceRoot });
-            return stdout.split('\n').filter(name => name.trim()).slice(0, 100); // Limit to 100 authors
+            console.log('Getting authors from git folder...');
+            
+            if (!await this.isGitRepository()) {
+                console.log('Not a git repository');
+                return [];
+            }
+            
+            const { stdout, stderr } = await execAsync('git log --pretty=format:"%an" --max-count=1000', { 
+                cwd: this.workspaceRoot,
+                encoding: 'utf8'
+            });
+            
+            if (stderr) {
+                console.warn('Git authors stderr:', stderr);
+            }
+            
+            console.log('Git authors output:', stdout);
+            
+            const authors = [...new Set(stdout.split('\n').filter(Boolean))];
+            console.log('Unique authors:', authors);
+            return authors;
+            
         } catch (error) {
             console.error('Error getting authors:', error);
             return [];
         }
     }
 
-    private parseGitLog(output: string): { hash: string; shortHash: string }[] {
-        const commits: { hash: string; shortHash: string }[] = [];
-        const lines = output.split('\n');
-        
-        for (const line of lines) {
-            if (line.trim()) {
-                // Extract hash from git log output
-                const match = line.match(/^[|\s]*([a-f0-9]{7,40})/);
-                if (match) {
-                    commits.push({
-                        hash: match[1],
-                        shortHash: match[1].substring(0, 7)
-                    });
-                }
-            }
-        }
-        
-        return commits;
-    }
-
-    private async getCommitDetails(hash: string): Promise<Partial<GitCommit>> {
+    async getCommitDetails(hash: string): Promise<Partial<GitCommit>> {
         try {
-            const { stdout } = await execAsync(`git show --pretty=format:"%H|%an|%ae|%s|%B" --no-patch ${hash}`, { 
-                cwd: this.workspaceRoot 
+            console.log('Getting commit details for:', hash);
+            
+            if (!await this.isGitRepository()) {
+                console.log('Not a git repository');
+                return {};
+            }
+            
+            const { stdout, stderr } = await execAsync(`git show --pretty=format:"%H|%an|%ae|%s|%B" --no-patch ${hash}`, { 
+                cwd: this.workspaceRoot,
+                encoding: 'utf8'
             });
             
-            const lines = stdout.split('\n');
-            const [fullHash, author, authorEmail, shortMessage, ...fullMessageLines] = lines[0].split('|');
-            const fullMessage = fullMessageLines.join('\n');
+            if (stderr) {
+                console.warn('Git show stderr:', stderr);
+            }
             
-            // Get parents
-            const { stdout: parentsOutput } = await execAsync(`git show --pretty=format:"%P" --no-patch ${hash}`, { 
-                cwd: this.workspaceRoot 
-            });
-            const parents = parentsOutput.trim().split(' ').filter(p => p);
+            const parts = stdout.split('|');
+            if (parts.length >= 4) {
+                return {
+                    hash: parts[0].trim(),
+                    author: parts[1].trim(),
+                    authorEmail: parts[2].trim(),
+                    message: parts[3].trim(),
+                    fullMessage: parts.slice(4).join('|').trim()
+                };
+            }
             
-            // Get refs
-            const { stdout: refsOutput } = await execAsync(`git show-ref --tags --heads | grep ${hash}`, { 
-                cwd: this.workspaceRoot 
-            });
-            const refs = refsOutput.split('\n')
-                .map(line => line.trim())
-                .filter(line => line)
-                .map(line => {
-                    const parts = line.split(' ');
-                    if (parts.length >= 2) {
-                        const refName = parts[1];
-                        if (refName.startsWith('refs/heads/')) {
-                            return `Branch ${refName.replace('refs/heads/', '')}`;
-                        } else if (refName.startsWith('refs/tags/')) {
-                            return `Tag ${refName.replace('refs/tags/', '')}`;
-                        }
-                        return refName;
-                    }
-                    return '';
-                })
-                .filter(ref => ref);
-
-            return {
-                hash: fullHash,
-                shortHash: fullHash.substring(0, 7),
-                author,
-                authorEmail,
-                message: shortMessage,
-                fullMessage,
-                parents,
-                refs,
-                date: new Date() // Will be filled with actual date if needed
-            };
+            return {};
         } catch (error) {
             console.error(`Error getting commit details for ${hash}:`, error);
             return {};
@@ -239,9 +291,33 @@ export class GitService {
 
     async isGitRepository(): Promise<boolean> {
         try {
-            await execAsync('git rev-parse --git-dir', { cwd: this.workspaceRoot });
-            return true;
-        } catch {
+            console.log('Checking if git repository in:', this.workspaceRoot);
+            
+            // First check if .git directory exists
+            const gitDir = path.join(this.workspaceRoot, '.git');
+            const gitDirExists = fs.existsSync(gitDir);
+            console.log('.git directory exists:', gitDirExists);
+            
+            if (!gitDirExists) {
+                return false;
+            }
+            
+            // Then verify with git command
+            const { stdout, stderr } = await execAsync('git rev-parse --git-dir', { 
+                cwd: this.workspaceRoot,
+                encoding: 'utf8'
+            });
+            
+            if (stderr) {
+                console.warn('Git rev-parse stderr:', stderr);
+            }
+            
+            const isRepo = stdout.trim() !== '';
+            console.log('Git command confirms repository:', isRepo);
+            return isRepo;
+            
+        } catch (error) {
+            console.error('Git repository check failed:', error);
             return false;
         }
     }

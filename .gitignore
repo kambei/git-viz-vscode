@@ -141,3 +141,5 @@ Thumbs.db
 *.temp
 
 out/
+.cursor/
+*.vsix

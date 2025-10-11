@@ -1,0 +1,22 @@
+{
+  "iconDefinitions": {
+    "git-viz-icon": {
+      "iconPath": "./git-viz-icon.svg"
+    },
+    "git-viz-icon-dark": {
+      "iconPath": "./git-viz-icon-dark.svg"
+    },
+    "git-viz-icon-light": {
+      "iconPath": "./git-viz-icon-light.svg"
+    }
+  },
+  "light": {
+    "git-viz-icon": "git-viz-icon-light"
+  },
+  "dark": {
+    "git-viz-icon": "git-viz-icon-dark"
+  },
+  "highContrast": {
+    "git-viz-icon": "git-viz-icon-light"
+  }
+}

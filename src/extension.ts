@@ -1,9 +1,14 @@
 import * as vscode from 'vscode';
 import { GitService, GitFilters } from './gitService';
 import { HorizontalGraphRenderer } from './graphRenderer';
+import { GitVizViewProvider } from './gitVizViewProvider';
 
 export function activate(context: vscode.ExtensionContext) {
 	console.log('Git Viz extension is now active!');
+
+	// Register the view provider
+	const gitVizProvider = new GitVizViewProvider();
+	vscode.window.registerTreeDataProvider('git-viz-view', gitVizProvider);
 
 	// Register commands
 	const openCommand = vscode.commands.registerCommand('git-viz.open', () => {
@@ -12,6 +17,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const refreshCommand = vscode.commands.registerCommand('git-viz.refresh', () => {
 		refreshGitVisualization();
+		gitVizProvider.refresh();
 	});
 
 	const zoomInCommand = vscode.commands.registerCommand('git-viz.zoomIn', () => {
@@ -125,10 +131,14 @@ async function loadGitData() {
 
 	} catch (error) {
 		console.error('Error loading git data:', error);
+		const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 		currentPanel.webview.postMessage({
 			command: 'updateStatus',
-			status: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+			status: `Error: ${errorMessage}`
 		});
+		
+		// Show error in VS Code notification
+		vscode.window.showErrorMessage(`Git Viz Error: ${errorMessage}`);
 	}
 }
 
