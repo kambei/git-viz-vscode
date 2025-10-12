@@ -11,6 +11,15 @@ A Visual Studio Code extension for visualizing git repositories with interactive
 
 ## Installation
 
+### From VS Code Marketplace (Recommended)
+
+1. Open VS Code
+2. Go to the Extensions view (`Ctrl+Shift+X`)
+3. Search for "Git Viz"
+4. Click Install
+
+### From Source (Development)
+
 1. Clone this repository
 2. Run `npm install` to install dependencies
 3. Press `F5` to open a new Extension Development Host window
