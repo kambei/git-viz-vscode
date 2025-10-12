@@ -12,6 +12,8 @@ export interface GraphEdge {
     from: GraphNode;
     to: GraphNode;
     color: string;
+    isMerge: boolean;
+    parentIndex: number;
 }
 
 export class HorizontalGraphRenderer {
@@ -144,46 +146,131 @@ export class HorizontalGraphRenderer {
             });
         }
 
-        // Dynamic branch hierarchy detection
         const branchList = Array.from(allBranches);
         
-        // Find primary and secondary branches
-        const primaryBranch = this.findPrimaryBranch(branchList);
-        const secondaryBranches = this.findSecondaryBranches(branchList, primaryBranch);
+        // Find the main branch (main, master, or develop)
+        const mainBranch = this.findMainBranch(branchList);
         
-        // Count total levels needed
-        const remainingBranches = branchList.filter(branch => 
-            branch !== primaryBranch && !secondaryBranches.includes(branch)
-        );
-        const patternGroups = this.groupBranchesByPatterns(remainingBranches);
-        const totalLevels = 2 + patternGroups.size + (remainingBranches.length - Array.from(patternGroups.values()).flat().length > 0 ? 1 : 0);
-        
-        // Assign levels with primary branch at the top (highest level number)
-        if (primaryBranch) {
-            hierarchy.set(primaryBranch, totalLevels - 1); // Primary at top
+        if (mainBranch) {
+            // Main branch is always level 0
+            hierarchy.set(mainBranch, 0);
+            
+            // Build hierarchy based on git relationships
+            this.buildBranchHierarchyFromGit(mainBranch, branchList, hierarchy);
+        } else {
+            // Fallback: if no main branch found, use the branch with most commits as level 0
+            const primaryBranch = this.findPrimaryBranch(branchList);
+            if (primaryBranch) {
+                hierarchy.set(primaryBranch, 0);
+                this.buildBranchHierarchyFromGit(primaryBranch, branchList, hierarchy);
+            }
         }
         
-        // Secondary branches one level down
-        secondaryBranches.forEach(branch => {
-            hierarchy.set(branch, totalLevels - 2);
+        // Assign remaining branches to level 0 if they don't have a level
+        branchList.forEach(branch => {
+            if (!hierarchy.has(branch)) {
+                hierarchy.set(branch, 0);
+            }
         });
-
-        // Pattern-based branches
-        let level = totalLevels - 3;
-        for (const [pattern, branches] of patternGroups) {
-            branches.forEach(branch => {
-                hierarchy.set(branch, level);
-            });
-            level--;
-        }
-
-        // Remaining branches at the bottom
-        const unassignedBranches = branchList.filter(branch => !hierarchy.has(branch));
-        unassignedBranches.forEach(branch => {
-            hierarchy.set(branch, Math.max(0, level));
-        });
-
+        
         return hierarchy;
+    }
+
+    private findMainBranch(branches: string[]): string | null {
+        // Look for common main branch names
+        const mainBranchNames = ['main', 'master', 'develop', 'trunk'];
+        
+        for (const mainName of mainBranchNames) {
+            if (branches.includes(mainName)) {
+                return mainName;
+            }
+        }
+        
+        return null;
+    }
+
+    private buildBranchHierarchyFromGit(
+        rootBranch: string, 
+        allBranches: string[], 
+        hierarchy: Map<string, number>
+    ): void {
+        const processedBranches = new Set<string>([rootBranch]);
+        const branchesToProcess = [...allBranches.filter(b => b !== rootBranch)];
+        
+        // Process branches level by level
+        let currentLevel = 1;
+        let branchesAtCurrentLevel = [...branchesToProcess];
+        
+        while (branchesAtCurrentLevel.length > 0) {
+            const branchesAtNextLevel: string[] = [];
+            
+            for (const branch of branchesAtCurrentLevel) {
+                if (processedBranches.has(branch)) continue;
+                
+                // Check if this branch was created from a branch at the current level
+                const parentBranch = this.findParentBranch(branch, Array.from(processedBranches));
+                
+                if (parentBranch) {
+                    hierarchy.set(branch, currentLevel);
+                    processedBranches.add(branch);
+                } else {
+                    // If we can't determine parent, try again in next iteration
+                    branchesAtNextLevel.push(branch);
+                }
+            }
+            
+            // Move to next level
+            currentLevel++;
+            branchesAtCurrentLevel = branchesAtNextLevel;
+            
+            // Prevent infinite loops
+            if (currentLevel > 10) break;
+        }
+        
+        // Assign remaining branches to level 1
+        branchesAtCurrentLevel.forEach(branch => {
+            if (!processedBranches.has(branch)) {
+                hierarchy.set(branch, 1);
+            }
+        });
+    }
+
+    private findParentBranch(branch: string, possibleParents: string[]): string | null {
+        // Find the commit where this branch diverged from its parent
+        const branchCommits = this.getCommitsForBranch(branch);
+        
+        for (const parentBranch of possibleParents) {
+            const parentCommits = this.getCommitsForBranch(parentBranch);
+            
+            // Check if this branch shares commits with the parent branch
+            // and if it diverged from the parent
+            if (this.branchDivergedFromParent(branchCommits, parentCommits)) {
+                return parentBranch;
+            }
+        }
+        
+        return null;
+    }
+
+    private getCommitsForBranch(branchName: string): GitCommit[] {
+        return this.commits.filter(commit => 
+            commit.refs.some(ref => ref === `Branch ${branchName}`)
+        );
+    }
+
+    private branchDivergedFromParent(branchCommits: GitCommit[], parentCommits: GitCommit[]): boolean {
+        // Check if the branch shares some commits with parent but has unique commits
+        const branchHashes = new Set(branchCommits.map(c => c.hash));
+        const parentHashes = new Set(parentCommits.map(c => c.hash));
+        
+        // Find shared commits
+        const sharedCommits = branchCommits.filter(c => parentHashes.has(c.hash));
+        
+        // Find unique commits in branch
+        const uniqueCommits = branchCommits.filter(c => !parentHashes.has(c.hash));
+        
+        // Branch diverged if it has both shared and unique commits
+        return sharedCommits.length > 0 && uniqueCommits.length > 0;
     }
 
     private findPrimaryBranch(branches: string[]): string | null {
@@ -286,29 +373,24 @@ export class HorizontalGraphRenderer {
         const levelNames: string[] = [];
         const maxLevel = Math.max(...Array.from(branchHierarchy.values()));
         
-        // Level names are indexed by level number (0 = bottom, maxLevel = top)
-        // Primary branch is at maxLevel (top)
-        const primaryBranch = Array.from(branchHierarchy.entries())
-            .find(([_, level]) => level === maxLevel)?.[0];
-        levelNames[maxLevel] = primaryBranch ? `${primaryBranch.charAt(0).toUpperCase() + primaryBranch.slice(1)}` : 'Primary';
-        
-        // Secondary branches are at maxLevel - 1
-        const secondaryBranches = Array.from(branchHierarchy.entries())
-            .filter(([_, level]) => level === maxLevel - 1)
-            .map(([name, _]) => name);
-        levelNames[maxLevel - 1] = secondaryBranches.length > 0 ? 
-            `${secondaryBranches[0].charAt(0).toUpperCase() + secondaryBranches[0].slice(1)}` : 'Secondary';
-        
-        // Pattern-based names for other levels
-        for (let level = maxLevel - 2; level >= 0; level--) {
+        // Generate level names based on actual hierarchy
+        for (let level = 0; level <= maxLevel; level++) {
             const branchesAtLevel = Array.from(branchHierarchy.entries())
                 .filter(([_, l]) => l === level)
                 .map(([name, _]) => name);
             
             if (branchesAtLevel.length > 0) {
-                // Try to determine pattern from branch names
-                const pattern = this.detectPatternFromBranches(branchesAtLevel);
-                levelNames[level] = pattern || `Level ${level}`;
+                if (level === 0) {
+                    // Level 0 shows the actual main branch name
+                    const mainBranch = branchesAtLevel.find(branch => 
+                        ['main', 'master', 'develop', 'trunk'].includes(branch)
+                    ) || branchesAtLevel[0];
+                    levelNames[level] = mainBranch; // Use actual branch name
+                } else {
+                    // For other levels, show the primary branch name at that level
+                    const primaryBranch = branchesAtLevel[0];
+                    levelNames[level] = `${primaryBranch} (L${level})`;
+                }
             } else {
                 levelNames[level] = `Level ${level}`;
             }
@@ -421,11 +503,16 @@ export class HorizontalGraphRenderer {
                 const parentNode = this.nodes.find(n => n.commit.hash.startsWith(parentHash));
                 
                 if (parentNode) {
+                    // Determine if this is a merge edge (multiple parents and not the first parent)
+                    const isMerge = commit.parents.length > 1 && i > 0;
+                    
                     // Since commits are now in reverse order, edges go from child (left) to parent (right)
                     this.edges.push({
                         from: node,      // Child (newer commit, on the left)
                         to: parentNode, // Parent (older commit, on the right)
-                        color: i === 0 ? node.color : parentNode.color // First parent uses child color
+                        color: i === 0 ? node.color : parentNode.color, // First parent uses child color
+                        isMerge: isMerge,
+                        parentIndex: i
                     });
                 }
             }
@@ -437,8 +524,17 @@ export class HorizontalGraphRenderer {
         const height = this.PADDING.top + this.PADDING.bottom + Math.max(1, this.getMaxLane() + 1) * this.ROW_GAP;
         
         let svg = `
-            <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg" class="git-graph">
+            <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg" class="git-graph graph-svg">
                 <defs>
+                    <!-- Arrow markers for directional edges -->
+                    <marker id="arrowhead" markerWidth="10" markerHeight="7" 
+                            refX="9" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="var(--vscode-foreground)" opacity="0.8"/>
+                    </marker>
+                    <marker id="merge-arrowhead" markerWidth="10" markerHeight="7" 
+                            refX="9" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="var(--vscode-textLink-foreground)" opacity="0.9"/>
+                    </marker>
                     <style>
                         .git-graph {
                             background-color: var(--vscode-editor-background);
@@ -513,18 +609,20 @@ export class HorizontalGraphRenderer {
                         }
                         .branch-label {
                             fill: var(--vscode-textLink-foreground);
-                            font-size: 11px;
+                            font-size: 12px;
                             font-weight: bold;
                             cursor: pointer;
+                            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
                         }
                         .branch-label:hover {
                             fill: var(--vscode-textLink-activeForeground);
                         }
                         .level-label {
                             fill: var(--vscode-descriptionForeground);
-                            font-size: 10px;
+                            font-size: 11px;
                             font-weight: bold;
-                            opacity: 0.8;
+                            opacity: 0.9;
+                            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
                         }
                         .tag-label {
                             fill: var(--vscode-descriptionForeground);
@@ -534,6 +632,20 @@ export class HorizontalGraphRenderer {
                         }
                         .tag-label:hover {
                             fill: var(--vscode-foreground);
+                        }
+                        .merge-edge {
+                            stroke-dasharray: 5,5;
+                            animation: merge-pulse 2s ease-in-out infinite;
+                        }
+                        .regular-edge {
+                            transition: stroke-width 0.2s ease;
+                        }
+                        .regular-edge:hover {
+                            stroke-width: 3;
+                        }
+                        @keyframes merge-pulse {
+                            0%, 100% { opacity: 0.9; }
+                            50% { opacity: 0.6; }
                         }
                     </style>
                 </defs>
@@ -558,14 +670,54 @@ export class HorizontalGraphRenderer {
     }
 
     private renderEdge(edge: GraphEdge): string {
-        const { from, to, color } = edge;
+        const { from, to, color, isMerge, parentIndex } = edge;
         const dx = Math.max(10, to.x - from.x);
-        const cx1 = from.x + dx / 2;
-        const cx2 = to.x - dx / 2;
+        const dy = to.y - from.y;
+        
+        // Different curve styles for different edge types
+        let pathData: string;
+        let strokeWidth: number;
+        let opacity: number;
+        let markerEnd: string;
+        
+        if (isMerge) {
+            // Merge edges: more pronounced curve, especially for cross-lane merges
+            const curveIntensity = Math.abs(dy) > this.ROW_GAP * 0.5 ? 1.5 : 1.0;
+            const cx1 = from.x + dx * 0.3;
+            const cy1 = from.y + dy * 0.1;
+            const cx2 = to.x - dx * 0.3;
+            const cy2 = to.y - dy * 0.1;
+            
+            pathData = `M ${from.x} ${from.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${to.x} ${to.y}`;
+            strokeWidth = 2.5;
+            opacity = 0.9;
+            markerEnd = 'url(#merge-arrowhead)';
+        } else {
+            // Regular parent-child edges
+            const cx1 = from.x + dx / 2;
+            const cx2 = to.x - dx / 2;
+            
+            pathData = `M ${from.x} ${from.y} C ${cx1} ${from.y}, ${cx2} ${to.y}, ${to.x} ${to.y}`;
+            strokeWidth = 2;
+            opacity = 0.8;
+            markerEnd = 'url(#arrowhead)';
+        }
+        
+        // Add visual emphasis for merges that go from higher lanes to lower lanes
+        const isDownwardMerge = isMerge && dy > this.ROW_GAP * 0.3;
+        if (isDownwardMerge) {
+            strokeWidth += 0.5;
+            opacity = Math.min(opacity + 0.1, 1.0);
+        }
         
         return `
-            <path d="M ${from.x} ${from.y} C ${cx1} ${from.y}, ${cx2} ${to.y}, ${to.x} ${to.y}"
-                  stroke="${color}" stroke-width="2" fill="none" opacity="0.8"/>
+            <path d="${pathData}"
+                  stroke="${color}" 
+                  stroke-width="${strokeWidth}" 
+                  fill="none" 
+                  opacity="${opacity}"
+                  marker-end="${markerEnd}"
+                  class="${isMerge ? 'merge-edge' : 'regular-edge'}"/>
         `;
     }
 
@@ -578,12 +730,15 @@ export class HorizontalGraphRenderer {
                     class="commit-node" data-hash="${commit.hash}"/>
         `;
 
+        // Calculate text positions with collision detection
+        const textPositions = this.calculateTextPositions(node);
+        
         // Render SHA and clickable author above the node
         const sha = commit.shortHash;
         const author = commit.author || 'Unknown';
         
         svg += `
-            <text x="${x}" y="${y - this.NODE_RADIUS - 8}" class="commit-text">
+            <text x="${x}" y="${textPositions.authorY}" class="commit-text">
                 ${sha} · 
                 <tspan class="clickable-author" data-hash="${commit.hash}" data-author="${author}" data-author-email="${commit.authorEmail}">
                     ${this.truncateText(author, 15)}
@@ -594,7 +749,7 @@ export class HorizontalGraphRenderer {
         // Render clickable commit message below the node
         const message = commit.message || '';
         svg += `
-            <text x="${x}" y="${y + this.NODE_RADIUS + 15}" class="commit-message clickable-message" 
+            <text x="${x}" y="${textPositions.messageY}" class="commit-message clickable-message" 
                   data-hash="${commit.hash}" data-message="${message}" data-full-message="${commit.fullMessage}">
                 ${this.truncateText(message, 25)}
             </text>
@@ -602,7 +757,7 @@ export class HorizontalGraphRenderer {
 
         // Render ref badges above the top text
         if (commit.refs.length > 0) {
-            let badgeY = y - this.NODE_RADIUS - 25;
+            let badgeY = textPositions.badgeY;
             for (const ref of commit.refs.slice(0, 3)) { // Limit to 3 badges
                 svg += this.renderRefBadge(ref, x, badgeY);
                 badgeY -= 20;
@@ -636,6 +791,73 @@ export class HorizontalGraphRenderer {
         `;
     }
 
+    private calculateTextPositions(node: GraphNode): { authorY: number, messageY: number, badgeY: number } {
+        const { x, y } = node;
+        
+        // Base positions
+        let authorY = y - this.NODE_RADIUS - 8;
+        let messageY = y + this.NODE_RADIUS + 15;
+        let badgeY = y - this.NODE_RADIUS - 25;
+        
+        // Check for collisions with nearby nodes
+        const nearbyNodes = this.nodes.filter(n => 
+            n !== node && 
+            Math.abs(n.x - x) < this.COLUMN_GAP * 0.8 && // Within 80% of column gap
+            Math.abs(n.y - y) < this.ROW_GAP * 0.8      // Within 80% of row gap
+        );
+        
+        // Check for collisions with branch labels on the same lane
+        const branchLabelsY = this.PADDING.left - 10; // X position of branch labels
+        const levelLabelsY = this.PADDING.left - 80; // X position of level labels
+        
+        // If this node is close to the left edge where branch labels are, adjust positions
+        if (x - this.PADDING.left < 100) {
+            const laneY = this.PADDING.top + node.lane * this.ROW_GAP;
+            
+            // Check if branch labels might overlap with our text
+            if (Math.abs(y - laneY) < 30) {
+                // Move text further away from branch labels
+                authorY = Math.min(authorY, laneY - 30);
+                badgeY = Math.min(badgeY, laneY - 50);
+            }
+        }
+        
+        for (const nearbyNode of nearbyNodes) {
+            const nearbyAuthorY = nearbyNode.y - this.NODE_RADIUS - 8;
+            const nearbyMessageY = nearbyNode.y + this.NODE_RADIUS + 15;
+            const nearbyBadgeY = nearbyNode.y - this.NODE_RADIUS - 25;
+            
+            // Adjust author text position if it would overlap
+            if (Math.abs(authorY - nearbyAuthorY) < 20) {
+                if (authorY >= nearbyAuthorY) {
+                    authorY = nearbyAuthorY - 20;
+                } else {
+                    authorY = nearbyAuthorY + 20;
+                }
+            }
+            
+            // Adjust message text position if it would overlap
+            if (Math.abs(messageY - nearbyMessageY) < 20) {
+                if (messageY >= nearbyMessageY) {
+                    messageY = nearbyMessageY - 20;
+                } else {
+                    messageY = nearbyMessageY + 20;
+                }
+            }
+            
+            // Adjust badge position if it would overlap
+            if (Math.abs(badgeY - nearbyBadgeY) < 20) {
+                if (badgeY >= nearbyBadgeY) {
+                    badgeY = nearbyBadgeY - 20;
+                } else {
+                    badgeY = nearbyBadgeY + 20;
+                }
+            }
+        }
+        
+        return { authorY, messageY, badgeY };
+    }
+
     private truncateText(text: string, maxLength: number): string {
         if (text.length <= maxLength) {
             return text;
@@ -664,35 +886,112 @@ export class HorizontalGraphRenderer {
         }
         
         let svg = '';
-        const labelX = this.PADDING.left - 10; // Moved closer to avoid cutoff
-        const levelX = this.PADDING.left - 80; // Better positioning for level labels
+        const labelX = this.PADDING.left - 10;
+        const levelX = this.PADDING.left - 80;
         
         // Define dynamic level names based on actual branch hierarchy
         const levelNames = this.generateLevelNames(branchHierarchy);
         
+        // Calculate positions for all labels to avoid overlaps
+        const labelPositions = this.calculateLabelPositions(branchLanes, levelNames, branchHierarchy);
+        
         for (const [branchName, lane] of branchLanes) {
-            const y = this.PADDING.top + lane * this.ROW_GAP;
             const level = branchHierarchy.get(branchName) || 0;
             const levelName = levelNames[level] || 'Other';
+            const positions = labelPositions.get(branchName);
             
-            // Add level indicator (only if it's not empty and not "Other")
-            if (levelName && levelName !== 'Other') {
+            if (positions) {
+                // Add level indicator (only if it's not empty and not "Other")
+                if (levelName && levelName !== 'Other') {
+                    svg += `
+                        <text x="${levelX}" y="${positions.levelY}" class="level-label" text-anchor="end">
+                            ${levelName}
+                        </text>
+                    `;
+                }
+                
+                // Add branch name
                 svg += `
-                    <text x="${levelX}" y="${y + 4}" class="level-label" text-anchor="end">
-                        ${levelName}
+                    <text x="${labelX}" y="${positions.branchY}" class="branch-label" text-anchor="end">
+                        ${branchName}
                     </text>
                 `;
             }
-            
-            // Add branch name
-            svg += `
-                <text x="${labelX}" y="${y + 4}" class="branch-label" text-anchor="end">
-                    ${branchName}
-                </text>
-            `;
         }
         
         return svg;
+    }
+
+    private calculateLabelPositions(
+        branchLanes: Map<string, number>, 
+        levelNames: string[], 
+        branchHierarchy: Map<string, number>
+    ): Map<string, { levelY: number, branchY: number }> {
+        const positions = new Map<string, { levelY: number, branchY: number }>();
+        const occupiedPositions = new Set<number>();
+        const minSpacing = 20; // Minimum vertical spacing between labels
+        
+        // Sort branches by lane to process them in order
+        const sortedBranches = Array.from(branchLanes.entries()).sort((a, b) => a[1] - b[1]);
+        
+        for (const [branchName, lane] of sortedBranches) {
+            const baseY = this.PADDING.top + lane * this.ROW_GAP + 4;
+            const level = branchHierarchy.get(branchName) || 0;
+            const levelName = levelNames[level] || 'Other';
+            
+            // Calculate positions for level and branch labels
+            let levelY = baseY;
+            let branchY = baseY;
+            
+            // Check for conflicts with existing positions
+            const conflicts = Array.from(occupiedPositions).filter(pos => 
+                Math.abs(pos - baseY) < minSpacing
+            );
+            
+            if (conflicts.length > 0) {
+                // Find the best available position
+                const sortedConflicts = conflicts.sort((a, b) => a - b);
+                let bestY = baseY;
+                
+                // Try to place above existing labels
+                for (let offset = minSpacing; offset <= minSpacing * 3; offset += minSpacing) {
+                    const candidateY = baseY - offset;
+                    if (!occupiedPositions.has(candidateY) && 
+                        !Array.from(occupiedPositions).some(pos => Math.abs(pos - candidateY) < minSpacing)) {
+                        bestY = candidateY;
+                        break;
+                    }
+                }
+                
+                // If no space above, try below
+                if (bestY === baseY) {
+                    for (let offset = minSpacing; offset <= minSpacing * 3; offset += minSpacing) {
+                        const candidateY = baseY + offset;
+                        if (!occupiedPositions.has(candidateY) && 
+                            !Array.from(occupiedPositions).some(pos => Math.abs(pos - candidateY) < minSpacing)) {
+                            bestY = candidateY;
+                            break;
+                        }
+                    }
+                }
+                
+                levelY = branchY = bestY;
+            }
+            
+            // Mark positions as occupied
+            occupiedPositions.add(levelY);
+            occupiedPositions.add(branchY);
+            
+            // Add small offset between level and branch labels if they're on the same line
+            if (levelName && levelName !== 'Other') {
+                branchY += 15; // Offset branch label slightly below level label
+                occupiedPositions.add(branchY);
+            }
+            
+            positions.set(branchName, { levelY, branchY });
+        }
+        
+        return positions;
     }
 
     private renderTagLabels(): string {

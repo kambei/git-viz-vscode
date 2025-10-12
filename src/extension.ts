@@ -719,8 +719,17 @@ function getWebviewContent() {
         function applyZoom() {
             const svg = document.querySelector('.graph-svg');
             if (svg) {
-                svg.style.transform = \`scale(\${currentScale}) translate(\${currentTranslate.x}px, \${currentTranslate.y}px)\`;
+                // Apply scale and translation
+                svg.style.transform = \`translate(\${currentTranslate.x}px, \${currentTranslate.y}px) scale(\${currentScale})\`;
                 svg.style.transformOrigin = 'center center';
+                
+                // Update container cursor based on zoom level
+                const container = document.getElementById('graphContainer');
+                if (currentScale > 1.0) {
+                    container.style.cursor = 'grab';
+                } else {
+                    container.style.cursor = 'default';
+                }
             }
         }
         
@@ -834,6 +843,7 @@ function getWebviewContent() {
             
             const delta = event.deltaY;
             const zoomFactor = 0.1;
+            const oldScale = currentScale;
             
             if (delta < 0) {
                 // Zoom in
@@ -843,18 +853,28 @@ function getWebviewContent() {
                 currentScale = Math.max(currentScale * (1 - zoomFactor), 0.5);
             }
             
+            // Adjust translation to zoom towards mouse position
+            const rect = event.target.getBoundingClientRect();
+            const mouseX = event.clientX - rect.left;
+            const mouseY = event.clientY - rect.top;
+            
+            const scaleChange = currentScale / oldScale;
+            currentTranslate.x = mouseX - (mouseX - currentTranslate.x) * scaleChange;
+            currentTranslate.y = mouseY - (mouseY - currentTranslate.y) * scaleChange;
+            
             applyZoom();
         }
         
         // Mouse drag functionality
         function handleMouseDown(event) {
-            if (event.button === 0) { // Left mouse button
+            if (event.button === 0 && currentScale > 1.0) { // Left mouse button and zoomed in
                 isDragging = true;
                 dragStart.x = event.clientX - currentTranslate.x;
                 dragStart.y = event.clientY - currentTranslate.y;
                 
                 // Change cursor to indicate dragging
-                document.body.style.cursor = 'grabbing';
+                const container = document.getElementById('graphContainer');
+                container.style.cursor = 'grabbing';
                 
                 event.preventDefault();
             }
@@ -871,7 +891,12 @@ function getWebviewContent() {
         function handleMouseUp(event) {
             if (event.button === 0) { // Left mouse button
                 isDragging = false;
-                document.body.style.cursor = 'default';
+                const container = document.getElementById('graphContainer');
+                if (currentScale > 1.0) {
+                    container.style.cursor = 'grab';
+                } else {
+                    container.style.cursor = 'default';
+                }
             }
         }
         
