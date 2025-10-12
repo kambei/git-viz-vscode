@@ -36,6 +36,14 @@ export interface BranchRelationship {
     divergencePoint?: string;
 }
 
+export interface FileChange {
+    file: string;
+    status: 'A' | 'M' | 'D' | 'R' | 'C' | 'U' | 'X' | 'B'; // Added, Modified, Deleted, Renamed, Copied, Unmerged, Unknown, Broken
+    additions: number;
+    deletions: number;
+    oldFile?: string; // For renamed files
+}
+
 export interface GitFilters {
     branch?: string;
     tag?: string;
@@ -500,6 +508,120 @@ export class GitService {
         } catch (error) {
             console.error(`Error getting commit details for ${hash}:`, error);
             return {};
+        }
+    }
+
+    async getFileChanges(hash: string): Promise<FileChange[]> {
+        try {
+            console.log('Getting file changes for commit:', hash);
+            
+            if (!await this.isGitRepository()) {
+                console.log('Not a git repository');
+                return [];
+            }
+            
+            // Check cache first
+            const cacheKey = this.getCacheKey('getFileChanges', hash);
+            const cached = this.getCachedData<FileChange[]>(cacheKey);
+            if (cached) {
+                console.log('Returning cached file changes:', cached.length);
+                return cached;
+            }
+            
+            // Get file changes with statistics
+            const { stdout, stderr } = await execAsync(`git show --stat --format="" ${hash}`, { 
+                cwd: this.workspaceRoot,
+                encoding: 'utf8'
+            });
+            
+            if (stderr) {
+                console.warn('Git show --stat stderr:', stderr);
+            }
+            
+            const fileChanges: FileChange[] = [];
+            const lines = stdout.split('\n');
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed && !trimmed.includes('files changed') && !trimmed.includes('insertions') && !trimmed.includes('deletions')) {
+                    // Parse file change line
+                    // Format: "file.txt | 5 +++++--" or "file.txt | 3 +++" or "file.txt | 2 --"
+                    const match = trimmed.match(/^(.+?)\s+\|\s*(\d+)\s*([+\-]+)$/);
+                    if (match) {
+                        const file = match[1].trim();
+                        const changes = match[3];
+                        const additions = (changes.match(/\+/g) || []).length;
+                        const deletions = (changes.match(/-/g) || []).length;
+                        
+                        // Determine status based on changes
+                        let status: FileChange['status'] = 'M'; // Default to modified
+                        if (additions > 0 && deletions === 0) {
+                            status = 'A'; // Added
+                        } else if (additions === 0 && deletions > 0) {
+                            status = 'D'; // Deleted
+                        }
+                        
+                        fileChanges.push({
+                            file,
+                            status,
+                            additions,
+                            deletions
+                        });
+                    }
+                }
+            }
+            
+            // Also get detailed file status for more accurate status detection
+            try {
+                const { stdout: nameStatus } = await execAsync(`git show --name-status --format="" ${hash}`, { 
+                    cwd: this.workspaceRoot,
+                    encoding: 'utf8'
+                });
+                
+                const statusLines = nameStatus.split('\n');
+                const statusMap = new Map<string, string>();
+                
+                for (const line of statusLines) {
+                    const trimmed = line.trim();
+                    if (trimmed) {
+                        const parts = trimmed.split('\t');
+                        if (parts.length >= 2) {
+                            const status = parts[0];
+                            const file = parts[1];
+                            statusMap.set(file, status);
+                        }
+                    }
+                }
+                
+                // Update file changes with accurate status
+                for (const fileChange of fileChanges) {
+                    const status = statusMap.get(fileChange.file);
+                    if (status) {
+                        fileChange.status = status as FileChange['status'];
+                        
+                        // Handle renamed files
+                        if (status.startsWith('R') && statusMap.has(fileChange.file)) {
+                            const oldFile = statusMap.get(fileChange.file);
+                            if (oldFile) {
+                                fileChange.oldFile = oldFile;
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn('Error getting detailed file status:', error);
+            }
+            
+            console.log('Processed file changes:', fileChanges.length);
+            
+            // Cache the result
+            this.setCachedData(cacheKey, fileChanges);
+            
+            return fileChanges;
+            
+        } catch (error) {
+            console.error(`Error getting file changes for ${hash}:`, error);
+            return [];
         }
     }
 

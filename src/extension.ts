@@ -321,13 +321,23 @@ function zoomOut() {
 	}
 }
 
-function showCommitDetails(commit: any) {
+async function showCommitDetails(commit: any) {
 	const message = vscode.window.createWebviewPanel(
 		'commitDetails',
 		`Commit ${commit.shortHash}`,
 		vscode.ViewColumn.Two,
 		{ enableScripts: true }
 	);
+
+	// Fetch file changes
+	let fileChanges: any[] = [];
+	if (currentGitService) {
+		try {
+			fileChanges = await currentGitService.getFileChanges(commit.hash);
+		} catch (error) {
+			console.error('Error fetching file changes:', error);
+		}
+	}
 
 	message.webview.html = `
 		<!DOCTYPE html>
@@ -343,6 +353,7 @@ function showCommitDetails(commit: any) {
 					color: var(--vscode-foreground);
 					background-color: var(--vscode-editor-background);
 					padding: 20px;
+					margin: 0;
 				}
 				.commit-header {
 					border-bottom: 1px solid var(--vscode-panel-border);
@@ -376,6 +387,86 @@ function showCommitDetails(commit: any) {
 					padding: 15px;
 					border-radius: 4px;
 					margin-top: 15px;
+					margin-bottom: 20px;
+				}
+				.file-changes-section {
+					margin-top: 20px;
+				}
+				.file-changes-header {
+					font-size: 14px;
+					font-weight: bold;
+					margin-bottom: 10px;
+					color: var(--vscode-foreground);
+				}
+				.file-changes-list {
+					background-color: var(--vscode-textCodeBlock-background);
+					border-radius: 4px;
+					padding: 10px;
+					max-height: 300px;
+					overflow-y: auto;
+				}
+				.file-change-item {
+					display: flex;
+					align-items: center;
+					padding: 6px 8px;
+					margin: 2px 0;
+					border-radius: 3px;
+					transition: background-color 0.2s;
+				}
+				.file-change-item:hover {
+					background-color: var(--vscode-list-hoverBackground);
+				}
+				.file-status {
+					width: 20px;
+					height: 20px;
+					border-radius: 3px;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					font-size: 10px;
+					font-weight: bold;
+					margin-right: 8px;
+					flex-shrink: 0;
+				}
+				.file-status.added {
+					background-color: #28a745;
+					color: white;
+				}
+				.file-status.modified {
+					background-color: #ffc107;
+					color: black;
+				}
+				.file-status.deleted {
+					background-color: #dc3545;
+					color: white;
+				}
+				.file-status.renamed {
+					background-color: #17a2b8;
+					color: white;
+				}
+				.file-name {
+					flex: 1;
+					font-family: monospace;
+					font-size: 12px;
+					word-break: break-all;
+				}
+				.file-stats {
+					font-size: 11px;
+					color: var(--vscode-descriptionForeground);
+					margin-left: 8px;
+					flex-shrink: 0;
+				}
+				.file-stats .additions {
+					color: #28a745;
+				}
+				.file-stats .deletions {
+					color: #dc3545;
+				}
+				.no-changes {
+					color: var(--vscode-descriptionForeground);
+					font-style: italic;
+					text-align: center;
+					padding: 20px;
 				}
 			</style>
 		</head>
@@ -387,9 +478,95 @@ function showCommitDetails(commit: any) {
 				<div class="commit-date">${commit.date}</div>
 			</div>
 			<div class="commit-body">${commit.fullMessage}</div>
+			
+			<div class="file-changes-section">
+				<div class="file-changes-header">Files Changed (${fileChanges.length})</div>
+				<div class="file-changes-list">
+					${fileChanges.length === 0 ? 
+						'<div class="no-changes">No file changes found</div>' :
+						fileChanges.map(change => `
+							<div class="file-change-item">
+								<div class="file-status ${getStatusClass(change.status)}">${change.status}</div>
+								<div class="file-name">${change.file}</div>
+								<div class="file-stats">
+									${change.additions > 0 ? `<span class="additions">+${change.additions}</span>` : ''}
+									${change.deletions > 0 ? `<span class="deletions">-${change.deletions}</span>` : ''}
+								</div>
+							</div>
+						`).join('')
+					}
+				</div>
+			</div>
 		</body>
 		</html>
 	`;
+}
+
+function getStatusClass(status: string): string {
+	switch (status) {
+		case 'A': return 'added';
+		case 'M': return 'modified';
+		case 'D': return 'deleted';
+		case 'R': return 'renamed';
+		case 'C': return 'copied';
+		default: return 'modified';
+	}
+}
+
+function getFileIcon(fileName: string): string {
+	const extension = fileName.split('.').pop()?.toLowerCase() || '';
+	const baseName = fileName.split('/').pop()?.toLowerCase() || '';
+	
+	// Common file extensions and their icons
+	const iconMap: { [key: string]: string } = {
+		// Code files
+		'js': '📄', 'ts': '📘', 'jsx': '⚛️', 'tsx': '⚛️',
+		'py': '🐍', 'java': '☕', 'cpp': '⚙️', 'c': '⚙️', 'h': '⚙️',
+		'cs': '🔷', 'php': '🐘', 'rb': '💎', 'go': '🐹', 'rs': '🦀',
+		'kt': '🟣', 'swift': '🍎', 'dart': '🎯', 'scala': '🔴',
+		
+		// Web files
+		'html': '🌐', 'htm': '🌐', 'css': '🎨', 'scss': '🎨', 'sass': '🎨',
+		'less': '🎨', 'vue': '💚', 'svelte': '🧡',
+		
+		// Config files
+		'json': '📋', 'xml': '📄', 'yaml': '📄', 'yml': '📄',
+		'toml': '📄', 'ini': '📄', 'cfg': '📄', 'conf': '📄',
+		'env': '🔧', 'gitignore': '🚫', 'dockerfile': '🐳',
+		
+		// Documentation
+		'md': '📝', 'txt': '📄', 'rst': '📄', 'adoc': '📄',
+		
+		// Images
+		'png': '🖼️', 'jpg': '🖼️', 'jpeg': '🖼️', 'gif': '🖼️',
+		'svg': '🎨', 'ico': '🖼️', 'webp': '🖼️',
+		
+		// Archives
+		'zip': '📦', 'tar': '📦', 'gz': '📦', 'rar': '📦',
+		'7z': '📦', 'bz2': '📦',
+		
+		// Special files
+		'lock': '🔒', 'log': '📊', 'sql': '🗄️', 'sh': '🐚',
+		'bat': '🐚', 'ps1': '🐚', 'exe': '⚙️', 'dll': '⚙️'
+	};
+	
+	// Check for special file names
+	if (baseName === 'package.json') return '📦';
+	if (baseName === 'readme.md') return '📖';
+	if (baseName === 'license') return '📜';
+	if (baseName === 'makefile') return '🔨';
+	if (baseName === 'dockerfile') return '🐳';
+	if (baseName === 'docker-compose.yml') return '🐳';
+	if (baseName.startsWith('.')) return '⚙️';
+	
+	return iconMap[extension] || '📄';
+}
+
+function getFileDisplayName(fileName: string): { name: string; path: string } {
+	const parts = fileName.split('/');
+	const name = parts.pop() || fileName;
+	const path = parts.join('/');
+	return { name, path };
 }
 
 function showAuthorDetails(author: string, authorEmail: string) {
@@ -442,13 +619,23 @@ function showAuthorDetails(author: string, authorEmail: string) {
 	`;
 }
 
-function showCommitMessageDetails(commit: any) {
+async function showCommitMessageDetails(commit: any) {
 	const message = vscode.window.createWebviewPanel(
 		'commitMessageDetails',
 		`Commit Message: ${commit.shortHash}`,
 		vscode.ViewColumn.Two,
 		{ enableScripts: true }
 	);
+
+	// Fetch file changes
+	let fileChanges: any[] = [];
+	if (currentGitService) {
+		try {
+			fileChanges = await currentGitService.getFileChanges(commit.hash);
+		} catch (error) {
+			console.error('Error fetching file changes:', error);
+		}
+	}
 
 	message.webview.html = `
 		<!DOCTYPE html>
@@ -464,6 +651,7 @@ function showCommitMessageDetails(commit: any) {
 					color: var(--vscode-foreground);
 					background-color: var(--vscode-editor-background);
 					padding: 20px;
+					margin: 0;
 				}
 				.commit-header {
 					border-bottom: 1px solid var(--vscode-panel-border);
@@ -497,6 +685,86 @@ function showCommitMessageDetails(commit: any) {
 					padding: 15px;
 					border-radius: 4px;
 					margin-top: 15px;
+					margin-bottom: 20px;
+				}
+				.file-changes-section {
+					margin-top: 20px;
+				}
+				.file-changes-header {
+					font-size: 14px;
+					font-weight: bold;
+					margin-bottom: 10px;
+					color: var(--vscode-foreground);
+				}
+				.file-changes-list {
+					background-color: var(--vscode-textCodeBlock-background);
+					border-radius: 4px;
+					padding: 10px;
+					max-height: 300px;
+					overflow-y: auto;
+				}
+				.file-change-item {
+					display: flex;
+					align-items: center;
+					padding: 6px 8px;
+					margin: 2px 0;
+					border-radius: 3px;
+					transition: background-color 0.2s;
+				}
+				.file-change-item:hover {
+					background-color: var(--vscode-list-hoverBackground);
+				}
+				.file-status {
+					width: 20px;
+					height: 20px;
+					border-radius: 3px;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					font-size: 10px;
+					font-weight: bold;
+					margin-right: 8px;
+					flex-shrink: 0;
+				}
+				.file-status.added {
+					background-color: #28a745;
+					color: white;
+				}
+				.file-status.modified {
+					background-color: #ffc107;
+					color: black;
+				}
+				.file-status.deleted {
+					background-color: #dc3545;
+					color: white;
+				}
+				.file-status.renamed {
+					background-color: #17a2b8;
+					color: white;
+				}
+				.file-name {
+					flex: 1;
+					font-family: monospace;
+					font-size: 12px;
+					word-break: break-all;
+				}
+				.file-stats {
+					font-size: 11px;
+					color: var(--vscode-descriptionForeground);
+					margin-left: 8px;
+					flex-shrink: 0;
+				}
+				.file-stats .additions {
+					color: #28a745;
+				}
+				.file-stats .deletions {
+					color: #dc3545;
+				}
+				.no-changes {
+					color: var(--vscode-descriptionForeground);
+					font-style: italic;
+					text-align: center;
+					padding: 20px;
 				}
 			</style>
 		</head>
@@ -508,6 +776,25 @@ function showCommitMessageDetails(commit: any) {
 				<div class="commit-date">${commit.date}</div>
 			</div>
 			<div class="commit-body">${commit.fullMessage}</div>
+			
+			<div class="file-changes-section">
+				<div class="file-changes-header">Files Changed (${fileChanges.length})</div>
+				<div class="file-changes-list">
+					${fileChanges.length === 0 ? 
+						'<div class="no-changes">No file changes found</div>' :
+						fileChanges.map(change => `
+							<div class="file-change-item">
+								<div class="file-status ${getStatusClass(change.status)}">${change.status}</div>
+								<div class="file-name">${change.file}</div>
+								<div class="file-stats">
+									${change.additions > 0 ? `<span class="additions">+${change.additions}</span>` : ''}
+									${change.deletions > 0 ? `<span class="deletions">-${change.deletions}</span>` : ''}
+								</div>
+							</div>
+						`).join('')
+					}
+				</div>
+			</div>
 		</body>
 		</html>
 	`;
