@@ -32,7 +32,7 @@ export class HorizontalGraphRenderer {
     private readonly COLUMN_GAP = 180;
     private readonly ROW_GAP = 80; // Increased for better branch level separation
     private readonly NODE_RADIUS = 7;
-    private readonly PADDING = { top: 96, right: 120, bottom: 96, left: 120 };
+    private readonly PADDING = { top: 96, right: 120, bottom: 96, left: 60 }; // Reduced left padding
 
     constructor(commits: GitCommit[]) {
         // Reverse commits to show newest first (left to right)
@@ -995,8 +995,8 @@ export class HorizontalGraphRenderer {
         );
         
         // Check for collisions with branch labels on the same lane
-        const branchLabelsY = this.PADDING.left - 10; // X position of branch labels
-        const levelLabelsY = this.PADDING.left - 80; // X position of level labels
+        const branchLabelsY = this.PADDING.left - 5; // X position of branch labels
+        const levelLabelsY = this.PADDING.left - 50; // X position of level labels
         
         // If this node is close to the left edge where branch labels are, adjust positions
         if (x - this.PADDING.left < 100) {
@@ -1061,21 +1061,31 @@ export class HorizontalGraphRenderer {
         const branchLanes = new Map<string, number>();
         const branchHierarchy = this.createBranchHierarchy();
         
-        // Collect branch information from commits
+        // Collect branch information from commits with filtering
         for (const commit of this.commits) {
             const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
             for (const ref of branchRefs) {
                 const branchName = ref.replace('Branch ', '');
-                const lane = this.laneAssignments.get(commit.hash);
-                if (lane !== undefined && !branchLanes.has(branchName)) {
-                    branchLanes.set(branchName, lane);
+                
+                // Filter out technical and redundant branch names
+                if (this.isValidBranchName(branchName)) {
+                    const lane = this.laneAssignments.get(commit.hash);
+                    if (lane !== undefined) {
+                        // Only keep the first occurrence of each branch name
+                        if (!branchLanes.has(branchName)) {
+                            branchLanes.set(branchName, lane);
+                        }
+                    }
                 }
             }
         }
         
+        console.log('Branch lanes:', Array.from(branchLanes.entries()));
+        console.log('Branch hierarchy:', Array.from(branchHierarchy.entries()));
+        
         let svg = '';
-        const labelX = this.PADDING.left - 10;
-        const levelX = this.PADDING.left - 80;
+        const labelX = this.PADDING.left - 5;  // Adjusted for reduced padding
+        const levelX = this.PADDING.left - 50; // Adjusted for reduced padding
         
         // Define dynamic level names based on actual branch hierarchy
         const levelNames = this.generateLevelNames(branchHierarchy);
@@ -1085,12 +1095,12 @@ export class HorizontalGraphRenderer {
         
         for (const [branchName, lane] of branchLanes) {
             const level = branchHierarchy.get(branchName) || 0;
-            const levelName = levelNames[level] || 'Other';
+            const levelName = levelNames[lane] || `Level ${lane}`; // Use lane instead of level
             const positions = labelPositions.get(branchName);
             
             if (positions) {
-                // Add level indicator (only if it's not empty and not "Other")
-                if (levelName && levelName !== 'Other') {
+                // Add level indicator (skip for main branch at L0)
+                if (levelName && lane !== 0) {
                     svg += `
                         <text x="${levelX}" y="${positions.levelY}" class="level-label" text-anchor="end">
                             ${levelName}
@@ -1108,6 +1118,33 @@ export class HorizontalGraphRenderer {
         }
         
         return svg;
+    }
+
+    private isValidBranchName(branchName: string): boolean {
+        // Filter out technical and redundant branch names
+        const invalidPatterns = [
+            /^refs\//,           // Technical refs like "refs/head"
+            /^HEAD$/,            // HEAD reference
+            /^ain$/,             // Partial branch names like "ain" from "main"
+            /^ead$/,             // Partial branch names like "ead" from "head"
+            /^ev$/,              // Partial branch names like "ev" from "dev"
+            /^aster$/,           // Partial branch names like "aster" from "master"
+            /^evelop$/,          // Partial branch names like "evelop" from "develop"
+            /^runk$/,            // Partial branch names like "runk" from "trunk"
+            /^[a-z]{1,3}$/,      // Very short branch names (likely partial)
+            /^origin$/,          // Origin reference
+            /^upstream$/,        // Upstream reference
+        ];
+        
+        // Check if branch name matches any invalid pattern
+        for (const pattern of invalidPatterns) {
+            if (pattern.test(branchName)) {
+                return false;
+            }
+        }
+        
+        // Must be a meaningful branch name
+        return branchName.length >= 3 && !branchName.includes('/') && !branchName.includes('->');
     }
 
     private calculateLabelPositions(
@@ -1184,6 +1221,7 @@ export class HorizontalGraphRenderer {
 
     private renderTagLabels(): string {
         const tagLanes = new Map<string, number>();
+        const tagCommits = new Map<string, GitCommit>();
         
         // Collect tag information from commits
         for (const commit of this.commits) {
@@ -1191,25 +1229,104 @@ export class HorizontalGraphRenderer {
             for (const ref of tagRefs) {
                 const tagName = ref.replace('Tag ', '');
                 const lane = this.laneAssignments.get(commit.hash);
-                if (lane !== undefined && !tagLanes.has(tagName)) {
+                if (lane !== undefined) {
+                    // Keep track of all tags and their lanes
                     tagLanes.set(tagName, lane);
+                    tagCommits.set(tagName, commit);
                 }
             }
         }
         
+        // Group tags by lane and keep only the latest tag per lane
+        const laneToLatestTag = new Map<number, { name: string, commit: GitCommit }>();
+        
+        console.log('Tag lanes:', Array.from(tagLanes.entries()));
+        
+        for (const [tagName, lane] of tagLanes) {
+            const commit = tagCommits.get(tagName);
+            if (commit) {
+                const existingTag = laneToLatestTag.get(lane);
+                if (!existingTag || commit.date > existingTag.commit.date) {
+                    laneToLatestTag.set(lane, { name: tagName, commit });
+                }
+            }
+        }
+        
+        console.log('Lane to latest tag:', Array.from(laneToLatestTag.entries()));
+        
         let svg = '';
         const labelX = this.getWidth() - this.PADDING.right + 20;
         
-        for (const [tagName, lane] of tagLanes) {
-            const y = this.PADDING.top + lane * this.ROW_GAP;
-            svg += `
-                <text x="${labelX}" y="${y + 4}" class="tag-label" text-anchor="start">
-                    ${tagName}
-                </text>
-            `;
+        // Calculate tag positions with collision detection
+        const tagPositions = this.calculateTagPositions(laneToLatestTag);
+        
+        for (const [lane, tagInfo] of laneToLatestTag) {
+            const position = tagPositions.get(lane);
+            if (position) {
+                svg += `
+                    <text x="${labelX}" y="${position.y}" class="tag-label" text-anchor="start">
+                        ${tagInfo.name}
+                    </text>
+                `;
+            }
         }
         
         return svg;
+    }
+
+    private calculateTagPositions(laneToLatestTag: Map<number, { name: string, commit: GitCommit }>): Map<number, { y: number }> {
+        const positions = new Map<number, { y: number }>();
+        const occupiedPositions = new Set<number>();
+        const minSpacing = 25; // Minimum vertical spacing between tag labels
+        
+        // Sort lanes to process them in order
+        const sortedLanes = Array.from(laneToLatestTag.keys()).sort((a, b) => a - b);
+        
+        for (const lane of sortedLanes) {
+            const baseY = this.PADDING.top + lane * this.ROW_GAP + 4;
+            let finalY = baseY;
+            
+            // Check for conflicts with existing positions
+            const conflicts = Array.from(occupiedPositions).filter(pos => 
+                Math.abs(pos - baseY) < minSpacing
+            );
+            
+            if (conflicts.length > 0) {
+                // Find the best available position
+                const sortedConflicts = conflicts.sort((a, b) => a - b);
+                let bestY = baseY;
+                
+                // Try to place above existing labels first
+                for (let offset = minSpacing; offset <= minSpacing * 3; offset += minSpacing) {
+                    const candidateY = baseY - offset;
+                    if (!occupiedPositions.has(candidateY) && 
+                        !Array.from(occupiedPositions).some(pos => Math.abs(pos - candidateY) < minSpacing)) {
+                        bestY = candidateY;
+                        break;
+                    }
+                }
+                
+                // If no space above, try below
+                if (bestY === baseY) {
+                    for (let offset = minSpacing; offset <= minSpacing * 3; offset += minSpacing) {
+                        const candidateY = baseY + offset;
+                        if (!occupiedPositions.has(candidateY) && 
+                            !Array.from(occupiedPositions).some(pos => Math.abs(pos - candidateY) < minSpacing)) {
+                            bestY = candidateY;
+                            break;
+                        }
+                    }
+                }
+                
+                finalY = bestY;
+            }
+            
+            // Mark position as occupied
+            occupiedPositions.add(finalY);
+            positions.set(lane, { y: finalY });
+        }
+        
+        return positions;
     }
 
     getWidth(): number {

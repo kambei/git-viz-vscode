@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { GitService, GitFilters } from './gitService';
+import { GitService, GitFilters, GitBranch, GitTag, GitCommit } from './gitService';
 import { HorizontalGraphRenderer } from './graphRenderer';
 import { GitVizViewProvider } from './gitVizViewProvider';
 
@@ -92,6 +92,56 @@ function openGitVisualization(context: vscode.ExtensionContext) {
 	loadGitData();
 }
 
+/*
+function filterRelevantBranches(allBranches: GitBranch[], commits: GitCommit[]): GitBranch[] {
+	// Extract all branch names mentioned in the commits
+	const commitBranchNames = new Set<string>();
+	
+	for (const commit of commits) {
+		for (const ref of commit.refs) {
+			if (ref.startsWith('Branch ')) {
+				const branchName = ref.replace('Branch ', '');
+				// Clean up branch name to match the format used in getBranches()
+				const cleanName = branchName.replace(/^remotes\/origin\//, '');
+				commitBranchNames.add(cleanName);
+			}
+		}
+	}
+	
+	console.log('All branches:', allBranches.map(b => b.name));
+	console.log('Commit branch names:', Array.from(commitBranchNames));
+	
+	// Filter branches to only include those mentioned in commits
+	const filtered = allBranches.filter(branch => commitBranchNames.has(branch.name));
+	console.log('Filtered branches:', filtered.map(b => b.name));
+	
+	return filtered;
+}
+
+function filterRelevantTags(allTags: GitTag[], commits: GitCommit[]): GitTag[] {
+	// Extract all tag names mentioned in the commits
+	const commitTagNames = new Set<string>();
+	
+	for (const commit of commits) {
+		for (const ref of commit.refs) {
+			if (ref.startsWith('Tag ')) {
+				const tagName = ref.replace('Tag ', '');
+				commitTagNames.add(tagName);
+			}
+		}
+	}
+	
+	console.log('All tags:', allTags.map(t => t.name));
+	console.log('Commit tag names:', Array.from(commitTagNames));
+	
+	// Filter tags to only include those mentioned in commits
+	const filtered = allTags.filter(tag => commitTagNames.has(tag.name));
+	console.log('Filtered tags:', filtered.map(t => t.name));
+	
+	return filtered;
+}
+*/
+
 async function loadGitData() {
 	if (!currentPanel || !currentGitService) {
 		return;
@@ -109,13 +159,21 @@ async function loadGitData() {
 		}
 
 		// Get git data
-		const [commits, branches, tags, authors, branchRelationships] = await Promise.all([
+		const [commits, allBranches, allTags, authors, branchRelationships] = await Promise.all([
 			currentGitService.getCommits(currentFilters),
 			currentGitService.getBranches(),
 			currentGitService.getTags(),
 			currentGitService.getAuthors(),
 			currentGitService.getBranchRelationships()
 		]);
+
+		// Filter branches and tags based on what's actually in the filtered commits
+		// const relevantBranches = filterRelevantBranches(allBranches, commits);
+		// const relevantTags = filterRelevantTags(allTags, commits);
+		
+		// Use all branches and tags for now
+		const relevantBranches = allBranches;
+		const relevantTags = allTags;
 
 		// Create graph renderer
 		const renderer = new HorizontalGraphRenderer(commits);
@@ -125,13 +183,13 @@ async function loadGitData() {
 		currentPanel.webview.postMessage({
 			command: 'updateGitData',
 			commits,
-			branches,
-			tags,
+			branches: relevantBranches,
+			tags: relevantTags,
 			authors,
 			branchRelationships,
 			graphSvg,
 			filters: currentFilters,
-			status: `Showing ${commits.length} commits • ${branches.length} branches`
+			status: `Showing ${commits.length} commits • ${relevantBranches.length} branches`
 		});
 
 	} catch (error) {
@@ -511,18 +569,6 @@ function getWebviewContent() {
         
         <div class="filters">
             <div class="filter-group">
-                <label>Branch:</label>
-                <select id="branchFilter">
-                    <option value="">All branches</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label>Tag:</label>
-                <select id="tagFilter">
-                    <option value="">All tags</option>
-                </select>
-            </div>
-            <div class="filter-group">
                 <label>Author:</label>
                 <select id="authorFilter">
                     <option value="">All authors</option>
@@ -532,7 +578,6 @@ function getWebviewContent() {
                 <label>Message:</label>
                 <input type="text" id="messageFilter" placeholder="Search in messages">
             </div>
-            <button class="btn" onclick="applyFilters()">Apply</button>
             <button class="btn" onclick="clearFilters()">Clear</button>
         </div>
         
@@ -549,6 +594,7 @@ function getWebviewContent() {
         let isDragging = false;
         let dragStart = { x: 0, y: 0 };
         let currentTranslate = { x: 0, y: 0 };
+        let messageFilterTimeout = null;
         
         function updateStatus(message) {
             document.getElementById('status').textContent = message;
@@ -561,14 +607,16 @@ function getWebviewContent() {
             updateStatus(data.status || 'Ready');
             
             // Update filter dropdowns
-            updateBranchFilter(data.branches || []);
-            updateTagFilter(data.tags || []);
             updateAuthorFilter(data.authors || []);
+            
+            // Set up message filter with debouncing
+            setupMessageFilter();
             
             // Update graph
             updateGraph(data.graphSvg);
         }
         
+        /*
         function updateBranchFilter(branches) {
             const select = document.getElementById('branchFilter');
             select.innerHTML = '<option value="">All branches</option>';
@@ -581,6 +629,13 @@ function getWebviewContent() {
                 }
                 select.appendChild(option);
             });
+            
+            // Remove any existing event listeners by cloning the element
+            const newSelect = select.cloneNode(true);
+            select.parentNode.replaceChild(newSelect, select);
+            
+            // Add event listener for immediate filtering
+            newSelect.addEventListener('change', applyFilters);
         }
         
         function updateTagFilter(tags) {
@@ -592,7 +647,15 @@ function getWebviewContent() {
                 option.textContent = tag.name;
                 select.appendChild(option);
             });
+            
+            // Remove any existing event listeners by cloning the element
+            const newSelect = select.cloneNode(true);
+            select.parentNode.replaceChild(newSelect, select);
+            
+            // Add event listener for immediate filtering
+            newSelect.addEventListener('change', applyFilters);
         }
+        */
         
         function updateAuthorFilter(authors) {
             const select = document.getElementById('authorFilter');
@@ -603,6 +666,35 @@ function getWebviewContent() {
                 option.textContent = author;
                 select.appendChild(option);
             });
+            
+            // Remove any existing event listeners by cloning the element
+            const newSelect = select.cloneNode(true);
+            select.parentNode.replaceChild(newSelect, select);
+            
+            // Add event listener for immediate filtering
+            newSelect.addEventListener('change', applyFilters);
+        }
+        
+        function setupMessageFilter() {
+            const messageInput = document.getElementById('messageFilter');
+            if (messageInput) {
+                // Remove any existing event listeners by cloning the element
+                const newInput = messageInput.cloneNode(true);
+                messageInput.parentNode.replaceChild(newInput, messageInput);
+                
+                // Add debounced input event listener
+                newInput.addEventListener('input', function() {
+                    // Clear existing timeout
+                    if (messageFilterTimeout) {
+                        clearTimeout(messageFilterTimeout);
+                    }
+                    
+                    // Set new timeout for debounced filtering
+                    messageFilterTimeout = setTimeout(() => {
+                        applyFilters();
+                    }, 500); // 500ms delay
+                });
+            }
         }
         
         function updateGraph(svgContent) {
@@ -675,13 +767,15 @@ function getWebviewContent() {
         
         function applyFilters() {
             const filters = {
-                branch: document.getElementById('branchFilter').value,
-                tag: document.getElementById('tagFilter').value,
+                branch: '', // Disabled
+                tag: '', // Disabled
                 author: document.getElementById('authorFilter').value,
                 message: document.getElementById('messageFilter').value,
                 maxCommits: currentData?.filters?.maxCommits || 500,
                 maxBranches: currentData?.filters?.maxBranches || 20
             };
+            
+            console.log('Applying filters:', filters);
             
             // Show loading status
             updateStatus('Applying filters...');
@@ -693,10 +787,15 @@ function getWebviewContent() {
         }
         
         function clearFilters() {
-            document.getElementById('branchFilter').value = '';
-            document.getElementById('tagFilter').value = '';
             document.getElementById('authorFilter').value = '';
             document.getElementById('messageFilter').value = '';
+            
+            // Clear any pending message filter timeout
+            if (messageFilterTimeout) {
+                clearTimeout(messageFilterTimeout);
+                messageFilterTimeout = null;
+            }
+            
             applyFilters();
         }
         

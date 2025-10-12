@@ -66,15 +66,34 @@ export class GitService {
             }
             
             // Build git log command with structured output including refs
-            let command = `git log --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits}`;
+            // Use --all to show commits from all branches including unrelated ones
+            // Use --decorate=full to show full ref names including remote branches
+            let command = `git log --all --decorate=full --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits}`;
             
             // Add filters
             if (filters.branch) {
-                command += ` ${filters.branch}`;
+                // Show all commits related to the branch by using git log with the branch as a starting point
+                // This will show the complete history of the branch including merge commits
+                // Try different branch reference formats to ensure we find the branch
+                const branchRefs = [
+                    filters.branch,                    // Direct name (for local branches)
+                    `origin/${filters.branch}`,       // Remote origin reference
+                    `remotes/origin/${filters.branch}` // Full remote reference
+                ];
+                
+                // Use the first available reference
+                command = `git log --decorate=full --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits} ${branchRefs.join(' ')}`;
             }
             
             if (filters.tag) {
-                command += ` ${filters.tag}`;
+                // Try different tag reference formats to ensure we find the tag
+                const tagRefs = [
+                    filters.tag,                    // Direct name
+                    `refs/tags/${filters.tag}`,    // Full tag reference
+                    `tags/${filters.tag}`          // Alternative tag reference
+                ];
+                
+                command = `git log --decorate=full --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits} ${tagRefs.join(' ')}`;
             }
             
             if (filters.author) {
@@ -97,6 +116,7 @@ export class GitService {
             }
             
             console.log('Git log output length:', stdout.length);
+            console.log('Git log output preview:', stdout.substring(0, 500));
             
             const commits: GitCommit[] = [];
             const lines = stdout.trim().split('\n');
@@ -119,10 +139,24 @@ export class GitService {
                                             refs.push(`Tag ${trimmedRef.substring(5)}`);
                                         } else if (trimmedRef.startsWith('HEAD -> ')) {
                                             refs.push(`Branch ${trimmedRef.substring(8)}`);
+                                        } else if (trimmedRef.startsWith('refs/heads/')) {
+                                            // Local branch
+                                            refs.push(`Branch ${trimmedRef.substring(11)}`);
+                                        } else if (trimmedRef.startsWith('refs/remotes/')) {
+                                            // Remote branch
+                                            const remoteBranch = trimmedRef.substring(13);
+                                            // Remove origin/ prefix for cleaner display
+                                            const branchName = remoteBranch.startsWith('origin/') ? 
+                                                remoteBranch.substring(7) : remoteBranch;
+                                            refs.push(`Branch ${branchName}`);
+                                        } else if (trimmedRef.startsWith('refs/tags/')) {
+                                            // Tag
+                                            refs.push(`Tag ${trimmedRef.substring(10)}`);
                                         } else if (trimmedRef.startsWith('origin/')) {
+                                            // Legacy remote branch format
                                             refs.push(`Branch ${trimmedRef.substring(7)}`);
-                                        } else if (!trimmedRef.includes('->')) {
-                                            // Regular branch name
+                                        } else if (!trimmedRef.includes('->') && !trimmedRef.startsWith('refs/') && trimmedRef.length >= 3) {
+                                            // Regular branch name (fallback) - only if meaningful length
                                             refs.push(`Branch ${trimmedRef}`);
                                         }
                                     }
