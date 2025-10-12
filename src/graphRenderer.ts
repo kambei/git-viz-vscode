@@ -14,6 +14,8 @@ export interface GraphEdge {
     color: string;
     isMerge: boolean;
     parentIndex: number;
+    isMergeToMain: boolean;
+    mergeDirection: 'up' | 'down' | 'same';
 }
 
 export class HorizontalGraphRenderer {
@@ -51,29 +53,27 @@ export class HorizontalGraphRenderer {
             branchLevels.set(branchName, level);
         }
 
-        // First pass: assign lanes to commits with branch refs
-        for (let i = 0; i < this.commits.length; i++) {
+        // First pass: assign lanes based on commit history and branch relationships
+        const maxLevel = Math.max(...Array.from(branchHierarchy.values()));
+        
+        // Process commits in chronological order (oldest first)
+        for (let i = this.commits.length - 1; i >= 0; i--) {
             const commit = this.commits[i];
             const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
             
-            if (branchRefs.length > 0) {
-                const branchName = branchRefs[0].replace('Branch ', '');
-                const level = branchLevels.get(branchName) || 0;
-                this.laneAssignments.set(commit.hash, level);
-                
-                // For primary branch, propagate backwards to show continuity
-                const branchHierarchy = this.createBranchHierarchy();
-                const maxLevel = Math.max(...Array.from(branchHierarchy.values()));
-                const isPrimaryBranch = branchHierarchy.get(branchName) === maxLevel;
-                
-                if (isPrimaryBranch) {
-                    this.propagateMainBranchBackwards(commit.hash, level);
-                } else {
-                    // Propagate forwards through first parent (which is now to the right)
-                    if (commit.parents.length > 0) {
-                        this.propagateBranchForwards(commit.parents[0], level);
-                    }
-                }
+            // Determine which branch this commit originally belonged to
+            const originalBranch = this.determineOriginalBranch(commit, branchHierarchy);
+            const level = branchLevels.get(originalBranch || 'main') || 0;
+            const lane = level;
+            
+            // Only assign if not already assigned
+            if (!this.laneAssignments.has(commit.hash)) {
+                this.laneAssignments.set(commit.hash, lane);
+            }
+            
+            // For main branch commits, propagate backwards to show continuity
+            if (originalBranch && branchHierarchy.get(originalBranch) === 0) {
+                this.propagateMainBranchBackwards(commit.hash, lane);
             }
         }
 
@@ -86,13 +86,78 @@ export class HorizontalGraphRenderer {
                 if (childLane !== null) {
                     this.laneAssignments.set(commit.hash, childLane);
                 } else {
-                    this.laneAssignments.set(commit.hash, 0); // Default lane
+                    // Default to main branch lane (0) for commits without explicit branch refs
+                    this.laneAssignments.set(commit.hash, 0);
                 }
             }
         }
 
         // Third pass: handle merge commits better
         this.handleMergeCommits();
+    }
+
+    private determineOriginalBranch(commit: any, branchHierarchy: Map<string, number>): string | null {
+        const branchRefs = commit.refs.filter((ref: string) => ref.startsWith('Branch '));
+        const branchNames = branchRefs.map((ref: string) => ref.replace('Branch ', ''));
+        
+        // If no branch refs, this is likely a main branch commit
+        if (branchNames.length === 0) {
+            return this.findMainBranchName(branchHierarchy);
+        }
+        
+        // Check if this commit is on multiple branches
+        if (branchNames.length > 1) {
+            // If commit is on multiple branches, determine which one it was originally created on
+            // Commits are usually created on the branch they're first committed to
+            
+            // Check commit message for clues
+            const message = commit.message.toLowerCase();
+            if (message.includes('merge') || message.includes('pull request')) {
+                // This is likely a merge commit, should be on main
+                return this.findMainBranchName(branchHierarchy);
+            }
+            
+            // Check if any of the branches is main
+            const mainBranchName = this.findMainBranchName(branchHierarchy);
+            if (branchNames.includes(mainBranchName)) {
+                return mainBranchName;
+            }
+            
+            // If not on main, it was likely created on the feature branch
+            // Return the first non-main branch
+            return branchNames.find((name: string) => branchHierarchy.get(name) !== 0) || branchNames[0];
+        }
+        
+        // Single branch case
+        const branchName = branchNames[0];
+        
+        // If this is a merge commit, it should be on main
+        const message = commit.message.toLowerCase();
+        if (message.includes('merge') || message.includes('pull request')) {
+            return this.findMainBranchName(branchHierarchy);
+        }
+        
+        return branchName;
+    }
+
+    private findMainBranchName(branchHierarchy: Map<string, number>): string {
+        // Find the main branch name (level 0)
+        for (const [branchName, level] of branchHierarchy) {
+            if (level === 0) {
+                return branchName;
+            }
+        }
+        
+        // Fallback to common main branch names
+        const commonMainNames = ['main', 'master', 'develop', 'trunk'];
+        for (const name of commonMainNames) {
+            if (branchHierarchy.has(name)) {
+                return name;
+            }
+        }
+        
+        // If no main branch found, return the first branch
+        return Array.from(branchHierarchy.keys())[0] || 'main';
     }
 
     private propagateMainBranchBackwards(commitHash: string, lane: number): void {
@@ -107,28 +172,20 @@ export class HorizontalGraphRenderer {
         for (let i = commitIndex + 1; i < this.commits.length; i++) {
             const olderCommit = this.commits[i];
             
-            // If this commit doesn't have a lane assigned yet, assign it to main
-            if (!this.laneAssignments.has(olderCommit.hash)) {
+            // Always assign older commits to main branch lane unless they're explicitly on other branches
+            const branchRefs = olderCommit.refs.filter(ref => ref.startsWith('Branch '));
+            const branchNames = branchRefs.map(ref => ref.replace('Branch ', ''));
+            
+            // Check if this commit is explicitly on a feature branch
+            const branchHierarchy = this.createBranchHierarchy();
+            const isOnFeatureBranch = branchNames.some(branchName => {
+                const level = branchHierarchy.get(branchName);
+                return level !== undefined && level > 0; // Feature branch (not main)
+            });
+            
+            // If not on a feature branch, assign to main branch lane
+            if (!isOnFeatureBranch) {
                 this.laneAssignments.set(olderCommit.hash, lane);
-            } else {
-                // If it already has a lane, check if it should be on main instead
-                const currentLane = this.laneAssignments.get(olderCommit.hash);
-                const branchHierarchy = this.createBranchHierarchy();
-                
-                // If this commit is not explicitly on a secondary branch, put it on primary
-                const branchRefs = olderCommit.refs.filter(ref => ref.startsWith('Branch '));
-                const maxLevel = Math.max(...Array.from(branchHierarchy.values()));
-                const secondaryLevel = maxLevel - 1;
-                
-                const isOnSecondaryBranch = branchRefs.some(ref => {
-                    const branchName = ref.replace('Branch ', '');
-                    return branchHierarchy.get(branchName) === secondaryLevel; // Secondary level
-                });
-                
-                if (!isOnSecondaryBranch && currentLane === secondaryLevel) {
-                    // Move from secondary lane to primary lane
-                    this.laneAssignments.set(olderCommit.hash, lane);
-                }
             }
         }
     }
@@ -197,9 +254,20 @@ export class HorizontalGraphRenderer {
         const processedBranches = new Set<string>([rootBranch]);
         const branchesToProcess = [...allBranches.filter(b => b !== rootBranch)];
         
-        // Process branches level by level
+        // Special handling for common branch patterns
+        const commonFeatureBranches = ['dev', 'develop', 'feature', 'staging'];
+        
+        // First, assign common feature branches to level 1
+        for (const branch of branchesToProcess) {
+            if (commonFeatureBranches.includes(branch.toLowerCase())) {
+                hierarchy.set(branch, 1);
+                processedBranches.add(branch);
+            }
+        }
+        
+        // Process remaining branches level by level
         let currentLevel = 1;
-        let branchesAtCurrentLevel = [...branchesToProcess];
+        let branchesAtCurrentLevel = branchesToProcess.filter(b => !processedBranches.has(b));
         
         while (branchesAtCurrentLevel.length > 0) {
             const branchesAtNextLevel: string[] = [];
@@ -373,26 +441,28 @@ export class HorizontalGraphRenderer {
         const levelNames: string[] = [];
         const maxLevel = Math.max(...Array.from(branchHierarchy.values()));
         
-        // Generate level names based on actual hierarchy
-        for (let level = 0; level <= maxLevel; level++) {
-            const branchesAtLevel = Array.from(branchHierarchy.entries())
-                .filter(([_, l]) => l === level)
-                .map(([name, _]) => name);
-            
-            if (branchesAtLevel.length > 0) {
-                if (level === 0) {
-                    // Level 0 shows the actual main branch name
-                    const mainBranch = branchesAtLevel.find(branch => 
-                        ['main', 'master', 'develop', 'trunk'].includes(branch)
-                    ) || branchesAtLevel[0];
-                    levelNames[level] = mainBranch; // Use actual branch name
-                } else {
-                    // For other levels, show the primary branch name at that level
-                    const primaryBranch = branchesAtLevel[0];
-                    levelNames[level] = `${primaryBranch} (L${level})`;
+        // Create a mapping from lane to branch name based on actual lane assignments
+        const laneToBranch = new Map<number, string>();
+        
+        // Find which branch is assigned to each lane by looking at commits
+        for (const commit of this.commits) {
+            const lane = this.laneAssignments.get(commit.hash);
+            if (lane !== undefined) {
+                const originalBranch = this.determineOriginalBranch(commit, branchHierarchy);
+                if (originalBranch && !laneToBranch.has(lane)) {
+                    laneToBranch.set(lane, originalBranch);
                 }
+            }
+        }
+        
+        // Generate level names based on lanes
+        for (let lane = 0; lane <= maxLevel; lane++) {
+            const branchName = laneToBranch.get(lane);
+            
+            if (branchName) {
+                levelNames[lane] = `${branchName} (L${lane})`;
             } else {
-                levelNames[level] = `Level ${level}`;
+                levelNames[lane] = `Level ${lane}`;
             }
         }
         
@@ -503,8 +573,14 @@ export class HorizontalGraphRenderer {
                 const parentNode = this.nodes.find(n => n.commit.hash.startsWith(parentHash));
                 
                 if (parentNode) {
-                    // Determine if this is a merge edge (multiple parents and not the first parent)
-                    const isMerge = commit.parents.length > 1 && i > 0;
+                    // Determine if this is a merge edge (multiple parents)
+                    const isMerge = commit.parents.length > 1;
+                    
+                    // Determine if this is a merge to main branch
+                    const isMergeToMain = this.isMergeToMainBranch(commit, parentNode, i, node);
+                    
+                    // Determine merge direction
+                    const mergeDirection = this.getMergeDirection(node, parentNode);
                     
                     // Since commits are now in reverse order, edges go from child (left) to parent (right)
                     this.edges.push({
@@ -512,10 +588,61 @@ export class HorizontalGraphRenderer {
                         to: parentNode, // Parent (older commit, on the right)
                         color: i === 0 ? node.color : parentNode.color, // First parent uses child color
                         isMerge: isMerge,
-                        parentIndex: i
+                        parentIndex: i,
+                        isMergeToMain: isMergeToMain,
+                        mergeDirection: mergeDirection
                     });
                 }
             }
+        }
+    }
+
+    private isMergeToMainBranch(commit: any, parentNode: GraphNode, parentIndex: number, currentNode: GraphNode): boolean {
+        // Check if this is a merge commit (multiple parents)
+        if (commit.parents.length <= 1) return false;
+        
+        // Check if the parent is on the main branch (level 0)
+        const branchHierarchy = this.createBranchHierarchy();
+        
+        // Find branches at level 0 (main branch level)
+        const mainBranches = Array.from(branchHierarchy.entries())
+            .filter(([_, level]) => level === 0)
+            .map(([name, _]) => name);
+        
+        // Check if parent commit is on a main branch
+        const parentBranchRefs = parentNode.commit.refs.filter(ref => ref.startsWith('Branch '));
+        const parentBranchNames = parentBranchRefs.map(ref => ref.replace('Branch ', ''));
+        
+        // Also check if the parent is at lane 0 (main branch lane)
+        const isAtMainLane = parentNode.lane === 0;
+        
+        // Check if this is a merge commit that's merging into main
+        const isMergeCommit = commit.message && commit.message.toLowerCase().includes('merge');
+        
+        // Check if current node is on a higher lane than parent (dev merging up to main)
+        const isUpwardMerge = currentNode.lane > parentNode.lane;
+        
+        // Check if current node is on a feature branch (like dev) and parent is on main
+        const currentNodeBranchRefs = currentNode.commit.refs.filter(ref => ref.startsWith('Branch '));
+        const currentNodeBranchNames = currentNodeBranchRefs.map(ref => ref.replace('Branch ', ''));
+        const isFeatureBranchToMain = currentNodeBranchNames.some(branchName => 
+            !mainBranches.includes(branchName) && branchName !== 'HEAD'
+        ) && (parentBranchNames.some(branchName => mainBranches.includes(branchName)) || isAtMainLane);
+        
+        return (parentBranchNames.some(branchName => mainBranches.includes(branchName)) || isAtMainLane) && 
+               (isMergeCommit || isUpwardMerge || isFeatureBranchToMain);
+    }
+
+    private getMergeDirection(fromNode: GraphNode, toNode: GraphNode): 'up' | 'down' | 'same' {
+        const dy = toNode.y - fromNode.y;
+        const threshold = this.ROW_GAP * 0.3;
+        
+        if (dy > threshold) {
+            return 'down'; // Merging down (from top to bottom)
+        } else if (dy < -threshold) {
+            return 'up';   // Merging up (from bottom to top)
+        } else {
+            return 'same'; // Same level merge
         }
     }
 
@@ -633,7 +760,20 @@ export class HorizontalGraphRenderer {
                         .tag-label:hover {
                             fill: var(--vscode-foreground);
                         }
-                        .merge-edge {
+                        .merge-to-main-edge {
+                            stroke-dasharray: 10,5;
+                            animation: merge-to-main-pulse 1.2s ease-in-out infinite;
+                            filter: drop-shadow(0 0 4px currentColor);
+                        }
+                        .merge-downward-edge {
+                            stroke-dasharray: 6,3;
+                            animation: merge-pulse 2s ease-in-out infinite;
+                        }
+                        .merge-upward-edge {
+                            stroke-dasharray: 4,6;
+                            animation: merge-pulse 2s ease-in-out infinite;
+                        }
+                        .merge-same-level-edge {
                             stroke-dasharray: 5,5;
                             animation: merge-pulse 2s ease-in-out infinite;
                         }
@@ -642,6 +782,10 @@ export class HorizontalGraphRenderer {
                         }
                         .regular-edge:hover {
                             stroke-width: 3;
+                        }
+                        @keyframes merge-to-main-pulse {
+                            0%, 100% { opacity: 1.0; stroke-width: 3.5; }
+                            50% { opacity: 0.8; stroke-width: 4.0; }
                         }
                         @keyframes merge-pulse {
                             0%, 100% { opacity: 0.9; }
@@ -670,7 +814,7 @@ export class HorizontalGraphRenderer {
     }
 
     private renderEdge(edge: GraphEdge): string {
-        const { from, to, color, isMerge, parentIndex } = edge;
+        const { from, to, color, isMerge, parentIndex, isMergeToMain, mergeDirection } = edge;
         const dx = Math.max(10, to.x - from.x);
         const dy = to.y - from.y;
         
@@ -679,19 +823,69 @@ export class HorizontalGraphRenderer {
         let strokeWidth: number;
         let opacity: number;
         let markerEnd: string;
+        let edgeClass: string;
         
         if (isMerge) {
-            // Merge edges: more pronounced curve, especially for cross-lane merges
-            const curveIntensity = Math.abs(dy) > this.ROW_GAP * 0.5 ? 1.5 : 1.0;
-            const cx1 = from.x + dx * 0.3;
-            const cy1 = from.y + dy * 0.1;
-            const cx2 = to.x - dx * 0.3;
-            const cy2 = to.y - dy * 0.1;
-            
-            pathData = `M ${from.x} ${from.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${to.x} ${to.y}`;
-            strokeWidth = 2.5;
-            opacity = 0.9;
-            markerEnd = 'url(#merge-arrowhead)';
+            // Enhanced merge edge rendering based on direction and target
+            if (isMergeToMain && mergeDirection === 'up') {
+                // Bottom-up merge to main: special styling with pronounced upward curve
+                const cx1 = from.x + dx * 0.15;
+                const cy1 = from.y - dy * 0.4; // More pronounced upward curve
+                const cx2 = to.x - dx * 0.15;
+                const cy2 = to.y + dy * 0.2;
+                
+                pathData = `M ${from.x} ${from.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${to.x} ${to.y}`;
+                strokeWidth = 3.5;
+                opacity = 1.0;
+                markerEnd = 'url(#merge-arrowhead)';
+                edgeClass = 'merge-to-main-edge';
+            } else if (isMergeToMain) {
+                // Merge to main (even if not upward): force upward curve for visual clarity
+                const cx1 = from.x + dx * 0.2;
+                const cy1 = from.y - Math.max(dy * 0.3, this.ROW_GAP * 0.2); // Force minimum upward curve
+                const cx2 = to.x - dx * 0.2;
+                const cy2 = to.y + Math.max(dy * 0.1, this.ROW_GAP * 0.1);
+                
+                pathData = `M ${from.x} ${from.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${to.x} ${to.y}`;
+                strokeWidth = 3.0;
+                opacity = 1.0;
+                markerEnd = 'url(#merge-arrowhead)';
+                edgeClass = 'merge-to-main-edge';
+            } else if (mergeDirection === 'up') {
+                // Upward merge (bottom to top)
+                const cx1 = from.x + dx * 0.3;
+                const cy1 = from.y - dy * 0.2;
+                const cx2 = to.x - dx * 0.3;
+                const cy2 = to.y + dy * 0.1;
+                
+                pathData = `M ${from.x} ${from.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${to.x} ${to.y}`;
+                strokeWidth = 2.5;
+                opacity = 0.9;
+                markerEnd = 'url(#merge-arrowhead)';
+                edgeClass = 'merge-upward-edge';
+            } else if (mergeDirection === 'down') {
+                // Downward merge (top to bottom)
+                const cx1 = from.x + dx * 0.3;
+                const cy1 = from.y + dy * 0.2;
+                const cx2 = to.x - dx * 0.3;
+                const cy2 = to.y - dy * 0.1;
+                
+                pathData = `M ${from.x} ${from.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${to.x} ${to.y}`;
+                strokeWidth = 2.5;
+                opacity = 0.9;
+                markerEnd = 'url(#merge-arrowhead)';
+                edgeClass = 'merge-downward-edge';
+            } else {
+                // Same level merge
+                const cx1 = from.x + dx / 2;
+                const cx2 = to.x - dx / 2;
+                
+                pathData = `M ${from.x} ${from.y} C ${cx1} ${from.y}, ${cx2} ${to.y}, ${to.x} ${to.y}`;
+                strokeWidth = 2.5;
+                opacity = 0.9;
+                markerEnd = 'url(#merge-arrowhead)';
+                edgeClass = 'merge-same-level-edge';
+            }
         } else {
             // Regular parent-child edges
             const cx1 = from.x + dx / 2;
@@ -701,13 +895,7 @@ export class HorizontalGraphRenderer {
             strokeWidth = 2;
             opacity = 0.8;
             markerEnd = 'url(#arrowhead)';
-        }
-        
-        // Add visual emphasis for merges that go from higher lanes to lower lanes
-        const isDownwardMerge = isMerge && dy > this.ROW_GAP * 0.3;
-        if (isDownwardMerge) {
-            strokeWidth += 0.5;
-            opacity = Math.min(opacity + 0.1, 1.0);
+            edgeClass = 'regular-edge';
         }
         
         return `
@@ -717,7 +905,7 @@ export class HorizontalGraphRenderer {
                   fill="none" 
                   opacity="${opacity}"
                   marker-end="${markerEnd}"
-                  class="${isMerge ? 'merge-edge' : 'regular-edge'}"/>
+                  class="${edgeClass}"/>
         `;
     }
 
