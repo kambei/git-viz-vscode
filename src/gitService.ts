@@ -29,6 +29,13 @@ export interface GitTag {
     commit: string;
 }
 
+export interface BranchRelationship {
+    branch: string;
+    parentBranch?: string;
+    mergeBase?: string;
+    divergencePoint?: string;
+}
+
 export interface GitFilters {
     branch?: string;
     tag?: string;
@@ -58,8 +65,8 @@ export class GitService {
                 return [];
             }
             
-            // Build git log command with structured output
-            let command = `git log --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P" --max-count=${maxCommits}`;
+            // Build git log command with structured output including refs
+            let command = `git log --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits}`;
             
             // Add filters
             if (filters.branch) {
@@ -97,8 +104,31 @@ export class GitService {
             for (const line of lines) {
                 if (line.trim()) {
                     const parts = line.split('|');
-                    if (parts.length >= 7) {
+                    if (parts.length >= 8) {
                         try {
+                            const refsString = parts[7].trim();
+                            const refs: string[] = [];
+                            
+                            // Parse refs (branches and tags)
+                            if (refsString) {
+                                const refParts = refsString.split(', ');
+                                for (const ref of refParts) {
+                                    const trimmedRef = ref.trim();
+                                    if (trimmedRef) {
+                                        if (trimmedRef.startsWith('tag: ')) {
+                                            refs.push(`Tag ${trimmedRef.substring(5)}`);
+                                        } else if (trimmedRef.startsWith('HEAD -> ')) {
+                                            refs.push(`Branch ${trimmedRef.substring(8)}`);
+                                        } else if (trimmedRef.startsWith('origin/')) {
+                                            refs.push(`Branch ${trimmedRef.substring(7)}`);
+                                        } else if (!trimmedRef.includes('->')) {
+                                            // Regular branch name
+                                            refs.push(`Branch ${trimmedRef}`);
+                                        }
+                                    }
+                                }
+                            }
+                            
                             const commit: GitCommit = {
                                 hash: parts[0].trim(),
                                 shortHash: parts[1].trim(),
@@ -108,7 +138,7 @@ export class GitService {
                                 fullMessage: parts[4].trim(), // Same as message for now
                                 date: new Date(parts[5].trim()),
                                 parents: parts[6].trim() ? parts[6].trim().split(' ') : [],
-                                refs: []
+                                refs: refs
                             };
                             commits.push(commit);
                         } catch (error) {
@@ -253,6 +283,76 @@ export class GitService {
             
         } catch (error) {
             console.error('Error getting authors:', error);
+            return [];
+        }
+    }
+
+    async getBranchRelationships(): Promise<BranchRelationship[]> {
+        try {
+            console.log('Getting branch relationships...');
+            
+            if (!await this.isGitRepository()) {
+                console.log('Not a git repository');
+                return [];
+            }
+            
+            const branches = await this.getBranches();
+            const relationships: BranchRelationship[] = [];
+            
+            for (const branch of branches) {
+                try {
+                    // Get the merge base with main/master branch
+                    const mainBranches = ['main', 'master', 'develop'];
+                    let parentBranch: string | undefined;
+                    let mergeBase: string | undefined;
+                    
+                    for (const mainBranch of mainBranches) {
+                        try {
+                            const { stdout } = await execAsync(`git merge-base ${branch.name} ${mainBranch}`, { 
+                                cwd: this.workspaceRoot,
+                                encoding: 'utf8'
+                            });
+                            if (stdout.trim()) {
+                                parentBranch = mainBranch;
+                                mergeBase = stdout.trim();
+                                break;
+                            }
+                        } catch (error) {
+                            // Branch doesn't exist, continue
+                        }
+                    }
+                    
+                    // If no main branch found, try to find the most recent common ancestor
+                    if (!parentBranch) {
+                        try {
+                            const { stdout } = await execAsync(`git merge-base --all ${branch.name} HEAD`, { 
+                                cwd: this.workspaceRoot,
+                                encoding: 'utf8'
+                            });
+                            if (stdout.trim()) {
+                                mergeBase = stdout.trim();
+                            }
+                        } catch (error) {
+                            console.warn(`Could not find merge base for branch ${branch.name}:`, error);
+                        }
+                    }
+                    
+                    relationships.push({
+                        branch: branch.name,
+                        parentBranch,
+                        mergeBase
+                    });
+                    
+                } catch (error) {
+                    console.warn(`Error getting relationship for branch ${branch.name}:`, error);
+                }
+            }
+            
+            console.log('Branch relationships:', relationships);
+            return relationships;
+            
+        } catch (error) {
+            console.error('Error getting branch relationships:', error);
             return [];
         }
     }

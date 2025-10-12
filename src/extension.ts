@@ -109,11 +109,12 @@ async function loadGitData() {
 		}
 
 		// Get git data
-		const [commits, branches, tags, authors] = await Promise.all([
+		const [commits, branches, tags, authors, branchRelationships] = await Promise.all([
 			currentGitService.getCommits(currentFilters),
 			currentGitService.getBranches(),
 			currentGitService.getTags(),
-			currentGitService.getAuthors()
+			currentGitService.getAuthors(),
+			currentGitService.getBranchRelationships()
 		]);
 
 		// Create graph renderer
@@ -127,6 +128,7 @@ async function loadGitData() {
 			branches,
 			tags,
 			authors,
+			branchRelationships,
 			graphSvg,
 			filters: currentFilters,
 			status: `Showing ${commits.length} commits • ${branches.length} branches`
