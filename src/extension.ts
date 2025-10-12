@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { GitService, GitFilters, GitBranch, GitTag, GitCommit } from './gitService';
+import { GitService, GitFilters, GitBranch, GitTag, GitCommit, BranchRelationship } from './gitService';
 import { HorizontalGraphRenderer } from './graphRenderer';
 import { GitVizViewProvider } from './gitVizViewProvider';
 
@@ -33,8 +33,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentGitService: GitService | undefined;
+let currentRenderer: HorizontalGraphRenderer | undefined;
 let currentFilters: GitFilters = {
-	maxCommits: 500,
+	maxCommits: 200, // Reduced default for faster loading
 	maxBranches: 20
 };
 
@@ -71,6 +72,10 @@ function openGitVisualization(context: vscode.ExtensionContext) {
 					break;
 				case 'applyFilters':
 					currentFilters = message.filters;
+					// Clear cache when filters change
+					if (currentGitService) {
+						currentGitService.clearCache();
+					}
 					await loadGitData();
 					break;
 				case 'showCommitDetails':
@@ -158,14 +163,44 @@ async function loadGitData() {
 			return;
 		}
 
-		// Get git data
-		const [commits, allBranches, allTags, authors, branchRelationships] = await Promise.all([
-			currentGitService.getCommits(currentFilters),
-			currentGitService.getBranches(),
-			currentGitService.getTags(),
-			currentGitService.getAuthors(),
-			currentGitService.getBranchRelationships()
-		]);
+		// Show initial loading status
+		currentPanel.webview.postMessage({
+			command: 'updateStatus',
+			status: 'Loading git data...'
+		});
+
+		// Get git data with progress updates
+		const gitDataPromises = [
+			{ name: 'commits', promise: currentGitService.getCommits(currentFilters) },
+			{ name: 'branches', promise: currentGitService.getBranches() },
+			{ name: 'tags', promise: currentGitService.getTags() },
+			{ name: 'authors', promise: currentGitService.getAuthors() },
+			{ name: 'relationships', promise: currentGitService.getBranchRelationships() }
+		];
+
+		// Track progress
+		let completedCount = 0;
+		const totalCount = gitDataPromises.length;
+
+		// Execute promises with progress updates
+		const results = await Promise.all(
+			gitDataPromises.map(async ({ name, promise }) => {
+				const result = await promise;
+				completedCount++;
+				
+				// Send progress update
+				if (currentPanel) {
+					currentPanel.webview.postMessage({
+						command: 'updateStatus',
+						status: `Loading git data... ${completedCount}/${totalCount} (${name})`
+					});
+				}
+				
+				return result;
+			})
+		);
+
+		const [commits, allBranches, allTags, authors, branchRelationships] = results as [GitCommit[], GitBranch[], GitTag[], string[], BranchRelationship[]];
 
 		// Filter branches and tags based on what's actually in the filtered commits
 		// const relevantBranches = filterRelevantBranches(allBranches, commits);
@@ -176,21 +211,10 @@ async function loadGitData() {
 		const relevantTags = allTags;
 
 		// Create graph renderer
-		const renderer = new HorizontalGraphRenderer(commits);
-		const graphSvg = renderer.render();
+		currentRenderer = new HorizontalGraphRenderer(commits);
 
-		// Send data to webview
-		currentPanel.webview.postMessage({
-			command: 'updateGitData',
-			commits,
-			branches: relevantBranches,
-			tags: relevantTags,
-			authors,
-			branchRelationships,
-			graphSvg,
-			filters: currentFilters,
-			status: `Showing ${commits.length} commits • ${relevantBranches.length} branches`
-		});
+		// Start gradual rendering
+		await startGradualRendering(commits, relevantBranches, relevantTags, authors, branchRelationships);
 
 	} catch (error) {
 		console.error('Error loading git data:', error);
@@ -202,6 +226,76 @@ async function loadGitData() {
 		
 		// Show error in VS Code notification
 		vscode.window.showErrorMessage(`Git Viz Error: ${errorMessage}`);
+	}
+}
+
+async function startGradualRendering(commits: any[], branches: any[], tags: any[], authors: string[], branchRelationships: any[]) {
+	if (!currentPanel || !currentRenderer) {
+		return;
+	}
+
+	try {
+		// Send initial data without graph
+		currentPanel.webview.postMessage({
+			command: 'updateGitData',
+			commits,
+			branches,
+			tags,
+			authors,
+			branchRelationships,
+			graphSvg: '',
+			filters: currentFilters,
+			status: `Preparing to render ${commits.length} commits...`,
+			useGradualRendering: true
+		});
+
+		// Start with initial render
+		const initialResult = currentRenderer.renderInitial();
+		
+		// Send initial graph
+		currentPanel.webview.postMessage({
+			command: 'updateGraphProgress',
+			svg: initialResult.svg,
+			progress: initialResult.progress,
+			isComplete: initialResult.isComplete,
+			status: `Rendering commits... ${Math.round(initialResult.progress)}%`
+		});
+
+		// Continue rendering chunks
+		let currentSvg = initialResult.svg;
+		while (!initialResult.isComplete) {
+			// Add small delay to prevent blocking the UI (reduced for faster rendering)
+			await new Promise(resolve => setTimeout(resolve, 30));
+			
+			const chunkResult = currentRenderer.renderNextChunk(currentSvg);
+			currentSvg = chunkResult.svg;
+			
+			// Send progress update
+			currentPanel.webview.postMessage({
+				command: 'updateGraphProgress',
+				svg: chunkResult.svg,
+				progress: chunkResult.progress,
+				isComplete: chunkResult.isComplete,
+				status: `Rendering commits... ${Math.round(chunkResult.progress)}%`
+			});
+
+			if (chunkResult.isComplete) {
+				break;
+			}
+		}
+
+		// Send final status
+		currentPanel.webview.postMessage({
+			command: 'updateStatus',
+			status: `Showing ${commits.length} commits • ${branches.length} branches`
+		});
+
+	} catch (error) {
+		console.error('Error during gradual rendering:', error);
+		currentPanel.webview.postMessage({
+			command: 'updateStatus',
+			status: `Rendering error: ${error instanceof Error ? error.message : 'Unknown error'}`
+		});
 	}
 }
 
@@ -553,6 +647,42 @@ function getWebviewContent() {
             text-align: center;
             padding: 20px;
         }
+        
+        .progress-container {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: var(--vscode-panel-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 8px;
+            padding: 20px;
+            min-width: 300px;
+            z-index: 1000;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background-color: var(--vscode-progressBar-background);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background-color: var(--vscode-progressBar-foreground);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        
+        .progress-text {
+            text-align: center;
+            color: var(--vscode-foreground);
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -584,6 +714,14 @@ function getWebviewContent() {
         <div class="graph-container" id="graphContainer">
             <div class="loading">Loading git data...</div>
         </div>
+        
+        <!-- Progress overlay -->
+        <div class="progress-container" id="progressContainer" style="display: none;">
+            <div class="progress-text" id="progressText">Rendering commits...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -612,8 +750,41 @@ function getWebviewContent() {
             // Set up message filter with debouncing
             setupMessageFilter();
             
-            // Update graph
-            updateGraph(data.graphSvg);
+            // Update graph (only if not using gradual rendering)
+            if (!data.useGradualRendering && data.graphSvg) {
+                updateGraph(data.graphSvg);
+            }
+        }
+        
+        function updateGraphProgress(data) {
+            // Update status with progress
+            updateStatus(data.status || 'Rendering...');
+            
+            // Show progress bar
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            
+            if (progressContainer && progressFill && progressText) {
+                progressContainer.style.display = 'block';
+                progressFill.style.width = (data.progress || 0) + '%';
+                progressText.textContent = data.status || 'Rendering...';
+            }
+            
+            // Update graph with new SVG content
+            if (data.svg) {
+                updateGraph(data.svg);
+            }
+            
+            // Hide progress bar when complete
+            if (data.isComplete) {
+                setTimeout(() => {
+                    if (progressContainer) {
+                        progressContainer.style.display = 'none';
+                    }
+                    updateStatus('Rendering complete');
+                }, 1000);
+            }
         }
         
         /*
@@ -926,6 +1097,9 @@ function getWebviewContent() {
                     break;
                 case 'updateGitData':
                     updateGitData(message);
+                    break;
+                case 'updateGraphProgress':
+                    updateGraphProgress(message);
                     break;
                 case 'zoomIn':
                     zoomIn();

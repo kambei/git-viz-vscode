@@ -47,14 +47,40 @@ export interface GitFilters {
 
 export class GitService {
     private workspaceRoot: string;
+    private cache: Map<string, { data: any; timestamp: number }> = new Map();
+    private readonly CACHE_DURATION = 30000; // 30 seconds cache
 
     constructor(workspaceRoot: string) {
         this.workspaceRoot = workspaceRoot;
     }
 
+    private getCacheKey(method: string, params: any): string {
+        return `${method}_${JSON.stringify(params)}`;
+    }
+
+    private getCachedData<T>(key: string): T | null {
+        const cached = this.cache.get(key);
+        if (cached && Date.now() - cached.timestamp < this.CACHE_DURATION) {
+            return cached.data as T;
+        }
+        return null;
+    }
+
+    private setCachedData<T>(key: string, data: T): void {
+        this.cache.set(key, { data, timestamp: Date.now() });
+    }
+
     async getCommits(filters: GitFilters = {}): Promise<GitCommit[]> {
         try {
-            const maxCommits = filters.maxCommits || 500;
+            // Check cache first
+            const cacheKey = this.getCacheKey('getCommits', filters);
+            const cached = this.getCachedData<GitCommit[]>(cacheKey);
+            if (cached) {
+                console.log('Returning cached commits:', cached.length);
+                return cached;
+            }
+
+            const maxCommits = filters.maxCommits || 200; // Reduced default for faster loading
             
             console.log('Getting commits from git folder:', this.workspaceRoot);
             console.log('Filters:', filters);
@@ -65,35 +91,27 @@ export class GitService {
                 return [];
             }
             
-            // Build git log command with structured output including refs
-            // Use --all to show commits from all branches including unrelated ones
-            // Use --decorate=full to show full ref names including remote branches
-            let command = `git log --all --decorate=full --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits}`;
+            // Optimized git log command - use --oneline for faster parsing, then get full details
+            // First get commit hashes and basic info
+            let command = `git log --all --decorate=short --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits}`;
             
             // Add filters
             if (filters.branch) {
-                // Show all commits related to the branch by using git log with the branch as a starting point
-                // This will show the complete history of the branch including merge commits
-                // Try different branch reference formats to ensure we find the branch
                 const branchRefs = [
-                    filters.branch,                    // Direct name (for local branches)
-                    `origin/${filters.branch}`,       // Remote origin reference
-                    `remotes/origin/${filters.branch}` // Full remote reference
+                    filters.branch,
+                    `origin/${filters.branch}`,
+                    `remotes/origin/${filters.branch}`
                 ];
-                
-                // Use the first available reference
-                command = `git log --decorate=full --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits} ${branchRefs.join(' ')}`;
+                command = `git log --decorate=short --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits} ${branchRefs.join(' ')}`;
             }
             
             if (filters.tag) {
-                // Try different tag reference formats to ensure we find the tag
                 const tagRefs = [
-                    filters.tag,                    // Direct name
-                    `refs/tags/${filters.tag}`,    // Full tag reference
-                    `tags/${filters.tag}`          // Alternative tag reference
+                    filters.tag,
+                    `refs/tags/${filters.tag}`,
+                    `tags/${filters.tag}`
                 ];
-                
-                command = `git log --decorate=full --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits} ${tagRefs.join(' ')}`;
+                command = `git log --decorate=short --pretty=format:"%H|%h|%an|%ae|%s|%ai|%P|%D" --max-count=${maxCommits} ${tagRefs.join(' ')}`;
             }
             
             if (filters.author) {
@@ -104,11 +122,12 @@ export class GitService {
                 command += ` --grep="${filters.message}" --regexp-ignore-case`;
             }
             
-            console.log('Executing git command:', command);
+            console.log('Executing optimized git command:', command);
             
             const { stdout, stderr } = await execAsync(command, { 
                 cwd: this.workspaceRoot,
-                encoding: 'utf8'
+                encoding: 'utf8',
+                maxBuffer: 1024 * 1024 * 10 // 10MB buffer for large repositories
             });
             
             if (stderr) {
@@ -116,75 +135,76 @@ export class GitService {
             }
             
             console.log('Git log output length:', stdout.length);
-            console.log('Git log output preview:', stdout.substring(0, 500));
             
             const commits: GitCommit[] = [];
             const lines = stdout.trim().split('\n');
             
-            for (const line of lines) {
-                if (line.trim()) {
-                    const parts = line.split('|');
-                    if (parts.length >= 8) {
-                        try {
-                            const refsString = parts[7].trim();
-                            const refs: string[] = [];
-                            
-                            // Parse refs (branches and tags)
-                            if (refsString) {
-                                const refParts = refsString.split(', ');
-                                for (const ref of refParts) {
-                                    const trimmedRef = ref.trim();
-                                    if (trimmedRef) {
-                                        if (trimmedRef.startsWith('tag: ')) {
-                                            refs.push(`Tag ${trimmedRef.substring(5)}`);
-                                        } else if (trimmedRef.startsWith('HEAD -> ')) {
-                                            refs.push(`Branch ${trimmedRef.substring(8)}`);
-                                        } else if (trimmedRef.startsWith('refs/heads/')) {
-                                            // Local branch
-                                            refs.push(`Branch ${trimmedRef.substring(11)}`);
-                                        } else if (trimmedRef.startsWith('refs/remotes/')) {
-                                            // Remote branch
-                                            const remoteBranch = trimmedRef.substring(13);
-                                            // Remove origin/ prefix for cleaner display
-                                            const branchName = remoteBranch.startsWith('origin/') ? 
-                                                remoteBranch.substring(7) : remoteBranch;
-                                            refs.push(`Branch ${branchName}`);
-                                        } else if (trimmedRef.startsWith('refs/tags/')) {
-                                            // Tag
-                                            refs.push(`Tag ${trimmedRef.substring(10)}`);
-                                        } else if (trimmedRef.startsWith('origin/')) {
-                                            // Legacy remote branch format
-                                            refs.push(`Branch ${trimmedRef.substring(7)}`);
-                                        } else if (!trimmedRef.includes('->') && !trimmedRef.startsWith('refs/') && trimmedRef.length >= 3) {
-                                            // Regular branch name (fallback) - only if meaningful length
-                                            refs.push(`Branch ${trimmedRef}`);
+            // Optimized parsing - process in batches
+            const batchSize = 100;
+            for (let i = 0; i < lines.length; i += batchSize) {
+                const batch = lines.slice(i, i + batchSize);
+                
+                for (const line of batch) {
+                    if (line.trim()) {
+                        const parts = line.split('|');
+                        if (parts.length >= 8) {
+                            try {
+                                const refsString = parts[7].trim();
+                                const refs: string[] = [];
+                                
+                                // Optimized ref parsing
+                                if (refsString) {
+                                    const refParts = refsString.split(', ');
+                                    for (const ref of refParts) {
+                                        const trimmedRef = ref.trim();
+                                        if (trimmedRef) {
+                                            if (trimmedRef.startsWith('tag: ')) {
+                                                refs.push(`Tag ${trimmedRef.substring(5)}`);
+                                            } else if (trimmedRef.startsWith('HEAD -> ')) {
+                                                refs.push(`Branch ${trimmedRef.substring(8)}`);
+                                            } else if (trimmedRef.startsWith('refs/heads/')) {
+                                                refs.push(`Branch ${trimmedRef.substring(11)}`);
+                                            } else if (trimmedRef.startsWith('refs/remotes/')) {
+                                                const remoteBranch = trimmedRef.substring(13);
+                                                const branchName = remoteBranch.startsWith('origin/') ? 
+                                                    remoteBranch.substring(7) : remoteBranch;
+                                                refs.push(`Branch ${branchName}`);
+                                            } else if (trimmedRef.startsWith('refs/tags/')) {
+                                                refs.push(`Tag ${trimmedRef.substring(10)}`);
+                                            } else if (trimmedRef.startsWith('origin/')) {
+                                                refs.push(`Branch ${trimmedRef.substring(7)}`);
+                                            } else if (!trimmedRef.includes('->') && !trimmedRef.startsWith('refs/') && trimmedRef.length >= 3) {
+                                                refs.push(`Branch ${trimmedRef}`);
+                                            }
                                         }
                                     }
                                 }
+                                
+                                const commit: GitCommit = {
+                                    hash: parts[0].trim(),
+                                    shortHash: parts[1].trim(),
+                                    author: parts[2].trim(),
+                                    authorEmail: parts[3].trim(),
+                                    message: parts[4].trim(),
+                                    fullMessage: parts[4].trim(),
+                                    date: new Date(parts[5].trim()),
+                                    parents: parts[6].trim() ? parts[6].trim().split(' ') : [],
+                                    refs: refs
+                                };
+                                commits.push(commit);
+                            } catch (error) {
+                                console.warn('Error parsing commit line:', line, error);
                             }
-                            
-                            const commit: GitCommit = {
-                                hash: parts[0].trim(),
-                                shortHash: parts[1].trim(),
-                                author: parts[2].trim(),
-                                authorEmail: parts[3].trim(),
-                                message: parts[4].trim(),
-                                fullMessage: parts[4].trim(), // Same as message for now
-                                date: new Date(parts[5].trim()),
-                                parents: parts[6].trim() ? parts[6].trim().split(' ') : [],
-                                refs: refs
-                            };
-                            commits.push(commit);
-                        } catch (error) {
-                            console.warn('Error parsing commit line:', line, error);
                         }
-                    } else {
-                        console.warn('Invalid commit line format:', line);
                     }
                 }
             }
             
             console.log('Successfully parsed commits:', commits.length);
+            
+            // Cache the result
+            this.setCachedData(cacheKey, commits);
+            
             return commits;
             
         } catch (error) {
@@ -195,6 +215,14 @@ export class GitService {
 
     async getBranches(): Promise<GitBranch[]> {
         try {
+            // Check cache first
+            const cacheKey = this.getCacheKey('getBranches', {});
+            const cached = this.getCachedData<GitBranch[]>(cacheKey);
+            if (cached) {
+                console.log('Returning cached branches:', cached.length);
+                return cached;
+            }
+
             console.log('Getting branches from git folder...');
             
             if (!await this.isGitRepository()) {
@@ -202,7 +230,8 @@ export class GitService {
                 return [];
             }
             
-            const { stdout, stderr } = await execAsync('git branch -a --sort=-committerdate', { 
+            // Optimized branch command - use --format for faster parsing
+            const { stdout, stderr } = await execAsync('git branch -a --format="%(refname:short)|%(HEAD)" --sort=-committerdate', { 
                 cwd: this.workspaceRoot,
                 encoding: 'utf8'
             });
@@ -211,28 +240,31 @@ export class GitService {
                 console.warn('Git branch stderr:', stderr);
             }
             
-            console.log('Git branch output:', stdout);
-            
             const branches: GitBranch[] = [];
             const lines = stdout.split('\n');
             
             for (const line of lines) {
                 const trimmed = line.trim();
                 if (trimmed && !trimmed.startsWith('remotes/origin/HEAD')) {
-                    const isCurrent = trimmed.startsWith('*');
-                    const name = trimmed.replace(/^\*\s*/, '').replace(/^remotes\/origin\//, '');
+                    const parts = trimmed.split('|');
+                    const name = parts[0].replace(/^remotes\/origin\//, '');
+                    const isCurrent = parts[1] === '*';
                     
                     if (name && !name.includes('->')) {
                         branches.push({
                             name,
                             isCurrent,
-                            lastCommit: '' // We'll get this separately if needed
+                            lastCommit: ''
                         });
                     }
                 }
             }
             
-            console.log('Processed branches:', branches);
+            console.log('Processed branches:', branches.length);
+            
+            // Cache the result
+            this.setCachedData(cacheKey, branches);
+            
             return branches;
             
         } catch (error) {
@@ -243,6 +275,14 @@ export class GitService {
 
     async getTags(): Promise<GitTag[]> {
         try {
+            // Check cache first
+            const cacheKey = this.getCacheKey('getTags', {});
+            const cached = this.getCachedData<GitTag[]>(cacheKey);
+            if (cached) {
+                console.log('Returning cached tags:', cached.length);
+                return cached;
+            }
+
             console.log('Getting tags from git folder...');
             
             if (!await this.isGitRepository()) {
@@ -250,7 +290,8 @@ export class GitService {
                 return [];
             }
             
-            const { stdout, stderr } = await execAsync('git tag --sort=-creatordate', { 
+            // Optimized tag command - get tag names and commits in one command
+            const { stdout, stderr } = await execAsync('git tag --format="%(refname:short)|%(objectname)" --sort=-creatordate', { 
                 cwd: this.workspaceRoot,
                 encoding: 'utf8'
             });
@@ -259,30 +300,27 @@ export class GitService {
                 console.warn('Git tag stderr:', stderr);
             }
             
-            console.log('Git tags output:', stdout);
-            
             const tags: GitTag[] = [];
             const lines = stdout.split('\n');
             
             for (const line of lines) {
                 const trimmed = line.trim();
                 if (trimmed) {
-                    try {
-                        const { stdout: commitHash } = await execAsync(`git rev-parse ${trimmed}`, { 
-                            cwd: this.workspaceRoot,
-                            encoding: 'utf8'
-                        });
+                    const parts = trimmed.split('|');
+                    if (parts.length >= 2) {
                         tags.push({
-                            name: trimmed,
-                            commit: commitHash.trim()
+                            name: parts[0],
+                            commit: parts[1]
                         });
-                    } catch (error) {
-                        console.warn(`Could not get commit for tag ${trimmed}:`, error);
                     }
                 }
             }
             
-            console.log('Processed tags:', tags);
+            console.log('Processed tags:', tags.length);
+            
+            // Cache the result
+            this.setCachedData(cacheKey, tags);
+            
             return tags;
             
         } catch (error) {
@@ -293,6 +331,14 @@ export class GitService {
 
     async getAuthors(): Promise<string[]> {
         try {
+            // Check cache first
+            const cacheKey = this.getCacheKey('getAuthors', {});
+            const cached = this.getCachedData<string[]>(cacheKey);
+            if (cached) {
+                console.log('Returning cached authors:', cached.length);
+                return cached;
+            }
+
             console.log('Getting authors from git folder...');
             
             if (!await this.isGitRepository()) {
@@ -300,7 +346,8 @@ export class GitService {
                 return [];
             }
             
-            const { stdout, stderr } = await execAsync('git log --pretty=format:"%an" --max-count=1000', { 
+            // Optimized authors command - limit to recent commits for faster execution
+            const { stdout, stderr } = await execAsync('git log --pretty=format:"%an" --max-count=1000 | sort | uniq', { 
                 cwd: this.workspaceRoot,
                 encoding: 'utf8'
             });
@@ -309,10 +356,12 @@ export class GitService {
                 console.warn('Git authors stderr:', stderr);
             }
             
-            console.log('Git authors output:', stdout);
-            
             const authors = [...new Set(stdout.split('\n').filter(Boolean))];
-            console.log('Unique authors:', authors);
+            console.log('Unique authors:', authors.length);
+            
+            // Cache the result
+            this.setCachedData(cacheKey, authors);
+            
             return authors;
             
         } catch (error) {
@@ -323,6 +372,14 @@ export class GitService {
 
     async getBranchRelationships(): Promise<BranchRelationship[]> {
         try {
+            // Check cache first
+            const cacheKey = this.getCacheKey('getBranchRelationships', {});
+            const cached = this.getCachedData<BranchRelationship[]>(cacheKey);
+            if (cached) {
+                console.log('Returning cached branch relationships:', cached.length);
+                return cached;
+            }
+
             console.log('Getting branch relationships...');
             
             if (!await this.isGitRepository()) {
@@ -333,7 +390,8 @@ export class GitService {
             const branches = await this.getBranches();
             const relationships: BranchRelationship[] = [];
             
-            for (const branch of branches) {
+            // Process branches in parallel for better performance
+            const branchPromises = branches.map(async (branch) => {
                 try {
                     // Get the merge base with main/master branch
                     const mainBranches = ['main', 'master', 'develop'];
@@ -371,24 +429,42 @@ export class GitService {
                         }
                     }
                     
-                    relationships.push({
+                    return {
                         branch: branch.name,
                         parentBranch,
                         mergeBase
-                    });
+                    };
                     
                 } catch (error) {
                     console.warn(`Error getting relationship for branch ${branch.name}:`, error);
+                    return {
+                        branch: branch.name,
+                        parentBranch: undefined,
+                        mergeBase: undefined
+                    };
                 }
-            }
+            });
             
-            console.log('Branch relationships:', relationships);
+            const results = await Promise.all(branchPromises);
+            relationships.push(...results);
+            
+            console.log('Branch relationships:', relationships.length);
+            
+            // Cache the result
+            this.setCachedData(cacheKey, relationships);
+            
             return relationships;
             
         } catch (error) {
             console.error('Error getting branch relationships:', error);
             return [];
         }
+    }
+
+    // Method to clear cache when needed
+    clearCache(): void {
+        this.cache.clear();
+        console.log('Git service cache cleared');
     }
 
     async getCommitDetails(hash: string): Promise<Partial<GitCommit>> {

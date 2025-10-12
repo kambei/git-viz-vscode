@@ -34,6 +34,11 @@ export class HorizontalGraphRenderer {
     private readonly NODE_RADIUS = 7;
     private readonly PADDING = { top: 96, right: 120, bottom: 96, left: 60 }; // Reduced left padding
 
+    // Gradual rendering properties
+    private readonly RENDER_CHUNK_SIZE = 25; // Number of commits to render per chunk (reduced for smoother rendering)
+    private renderedCommitsCount = 0;
+    private isRenderingComplete = false;
+
     constructor(commits: GitCommit[]) {
         // Reverse commits to show newest first (left to right)
         this.commits = [...commits].reverse();
@@ -811,6 +816,213 @@ export class HorizontalGraphRenderer {
 
         svg += '</svg>';
         return svg;
+    }
+
+    // Gradual rendering methods
+    renderInitial(): { svg: string; progress: number; isComplete: boolean } {
+        this.renderedCommitsCount = 0;
+        this.isRenderingComplete = false;
+        
+        const width = this.PADDING.left + this.PADDING.right + Math.max(1, this.commits.length) * this.COLUMN_GAP;
+        const height = this.PADDING.top + this.PADDING.bottom + Math.max(1, this.getMaxLane() + 1) * this.ROW_GAP;
+        
+        let svg = `
+            <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg" class="git-graph graph-svg">
+                <defs>
+                    <!-- Arrow markers for directional edges -->
+                    <marker id="arrowhead" markerWidth="10" markerHeight="7" 
+                            refX="9" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="var(--vscode-foreground)" opacity="0.8"/>
+                    </marker>
+                    <marker id="merge-arrowhead" markerWidth="10" markerHeight="7" 
+                            refX="9" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="var(--vscode-textLink-foreground)" opacity="0.9"/>
+                    </marker>
+                    <style>
+                        .git-graph {
+                            background-color: var(--vscode-editor-background);
+                            font-family: var(--vscode-font-family);
+                            font-size: var(--vscode-font-size);
+                        }
+                        .commit-node {
+                            cursor: pointer;
+                            transition: r 0.2s ease;
+                        }
+                        .commit-node:hover {
+                            r: ${this.NODE_RADIUS + 2};
+                        }
+                        .commit-text {
+                            fill: var(--vscode-foreground);
+                            font-size: 11px;
+                            text-anchor: middle;
+                        }
+                        .clickable-author {
+                            fill: var(--vscode-textLink-foreground);
+                            cursor: pointer;
+                            text-decoration: underline;
+                        }
+                        .clickable-author:hover {
+                            fill: var(--vscode-textLink-activeForeground);
+                        }
+                        .commit-message {
+                            fill: var(--vscode-foreground);
+                            font-size: 10px;
+                            text-anchor: middle;
+                        }
+                        .clickable-message {
+                            fill: var(--vscode-textLink-foreground);
+                            cursor: pointer;
+                            text-decoration: underline;
+                        }
+                        .clickable-message:hover {
+                            fill: var(--vscode-textLink-activeForeground);
+                        }
+                        .ref-badge {
+                            fill: var(--vscode-button-background);
+                            stroke: var(--vscode-button-border);
+                            stroke-width: 1;
+                        }
+                        .branch-badge {
+                            fill: var(--vscode-button-background);
+                            stroke: var(--vscode-button-border);
+                            stroke-width: 1;
+                        }
+                        .tag-badge {
+                            fill: var(--vscode-button-secondaryBackground);
+                            stroke: var(--vscode-button-secondaryBorder);
+                            stroke-width: 1;
+                        }
+                        .ref-text {
+                            fill: var(--vscode-button-foreground);
+                            font-size: 9px;
+                            text-anchor: middle;
+                            font-weight: bold;
+                        }
+                        .branch-text {
+                            fill: var(--vscode-button-foreground);
+                            font-size: 9px;
+                            text-anchor: middle;
+                            font-weight: bold;
+                        }
+                        .tag-text {
+                            fill: var(--vscode-button-secondaryForeground);
+                            font-size: 9px;
+                            text-anchor: middle;
+                            font-weight: bold;
+                        }
+                        .branch-label {
+                            fill: var(--vscode-textLink-foreground);
+                            font-size: 12px;
+                            font-weight: bold;
+                            cursor: pointer;
+                            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+                        }
+                        .branch-label:hover {
+                            fill: var(--vscode-textLink-activeForeground);
+                        }
+                        .level-label {
+                            fill: var(--vscode-descriptionForeground);
+                            font-size: 11px;
+                            font-weight: bold;
+                            opacity: 0.9;
+                            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+                        }
+                        .tag-label {
+                            fill: var(--vscode-descriptionForeground);
+                            font-size: 10px;
+                            font-weight: bold;
+                            cursor: pointer;
+                        }
+                        .tag-label:hover {
+                            fill: var(--vscode-foreground);
+                        }
+                        .merge-to-main-edge {
+                            stroke-dasharray: 10,5;
+                            animation: merge-to-main-pulse 1.2s ease-in-out infinite;
+                            filter: drop-shadow(0 0 4px currentColor);
+                        }
+                        .merge-downward-edge {
+                            stroke-dasharray: 6,3;
+                            animation: merge-pulse 2s ease-in-out infinite;
+                        }
+                        .merge-upward-edge {
+                            stroke-dasharray: 4,6;
+                            animation: merge-pulse 2s ease-in-out infinite;
+                        }
+                        .merge-same-level-edge {
+                            stroke-dasharray: 5,5;
+                            animation: merge-pulse 2s ease-in-out infinite;
+                        }
+                        .regular-edge {
+                            transition: stroke-width 0.2s ease;
+                        }
+                        .regular-edge:hover {
+                            stroke-width: 3;
+                        }
+                        @keyframes merge-to-main-pulse {
+                            0%, 100% { opacity: 1.0; stroke-width: 3.5; }
+                            50% { opacity: 0.8; stroke-width: 4.0; }
+                        }
+                        @keyframes merge-pulse {
+                            0%, 100% { opacity: 0.9; }
+                            50% { opacity: 0.6; }
+                        }
+                    </style>
+                </defs>
+        `;
+
+        // Render branch and tag labels first (they don't depend on commits)
+        svg += this.renderBranchLabels();
+        svg += this.renderTagLabels();
+
+        // Render initial chunk of commits
+        const result = this.renderNextChunk(svg);
+        return result;
+    }
+
+    renderNextChunk(currentSvg: string = ''): { svg: string; progress: number; isComplete: boolean } {
+        const startIndex = this.renderedCommitsCount;
+        const endIndex = Math.min(startIndex + this.RENDER_CHUNK_SIZE, this.commits.length);
+        
+        let svg = currentSvg;
+        
+        // Render edges for this chunk
+        const chunkEdges = this.edges.filter(edge => {
+            const fromIndex = this.nodes.findIndex(n => n.commit.hash === edge.from.commit.hash);
+            const toIndex = this.nodes.findIndex(n => n.commit.hash === edge.to.commit.hash);
+            return fromIndex >= startIndex && fromIndex < endIndex || 
+                   toIndex >= startIndex && toIndex < endIndex;
+        });
+        
+        for (const edge of chunkEdges) {
+            svg += this.renderEdge(edge);
+        }
+
+        // Render nodes for this chunk
+        for (let i = startIndex; i < endIndex; i++) {
+            if (i < this.nodes.length) {
+                svg += this.renderNode(this.nodes[i]);
+            }
+        }
+
+        this.renderedCommitsCount = endIndex;
+        const progress = Math.min(100, (this.renderedCommitsCount / this.commits.length) * 100);
+        const isComplete = this.renderedCommitsCount >= this.commits.length;
+        
+        if (isComplete) {
+            this.isRenderingComplete = true;
+            svg += '</svg>';
+        }
+
+        return { svg, progress, isComplete };
+    }
+
+    getRenderingProgress(): number {
+        return Math.min(100, (this.renderedCommitsCount / this.commits.length) * 100);
+    }
+
+    isRenderingFinished(): boolean {
+        return this.isRenderingComplete;
     }
 
     private renderEdge(edge: GraphEdge): string {
