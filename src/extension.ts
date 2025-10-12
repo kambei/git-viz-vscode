@@ -109,11 +109,12 @@ async function loadGitData() {
 		}
 
 		// Get git data
-		const [commits, branches, tags, authors] = await Promise.all([
+		const [commits, branches, tags, authors, branchRelationships] = await Promise.all([
 			currentGitService.getCommits(currentFilters),
 			currentGitService.getBranches(),
 			currentGitService.getTags(),
-			currentGitService.getAuthors()
+			currentGitService.getAuthors(),
+			currentGitService.getBranchRelationships()
 		]);
 
 		// Create graph renderer
@@ -127,6 +128,7 @@ async function loadGitData() {
 			branches,
 			tags,
 			authors,
+			branchRelationships,
 			graphSvg,
 			filters: currentFilters,
 			status: `Showing ${commits.length} commits • ${branches.length} branches`
@@ -413,10 +415,21 @@ function getWebviewContent() {
             border-radius: 4px;
             cursor: pointer;
             font-size: 12px;
+            transition: background-color 0.2s ease;
         }
         
         .btn:hover {
             background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        .btn:active {
+            background-color: var(--vscode-button-activeBackground);
+        }
+        
+        .btn:disabled {
+            background-color: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            cursor: not-allowed;
         }
         
         .filters {
@@ -453,6 +466,11 @@ function getWebviewContent() {
             flex: 1;
             overflow: auto;
             position: relative;
+            cursor: grab;
+        }
+        
+        .graph-container:active {
+            cursor: grabbing;
         }
         
         .graph-svg {
@@ -485,6 +503,7 @@ function getWebviewContent() {
             <div class="status" id="status">Loading...</div>
             <div class="controls">
                 <button class="btn" onclick="showLimitsDialog()">Limits…</button>
+                <button class="btn" onclick="resetView()">Reset</button>
                 <button class="btn" onclick="zoomOut()">-</button>
                 <button class="btn" onclick="zoomIn()">+</button>
             </div>
@@ -527,6 +546,9 @@ function getWebviewContent() {
         
         let currentScale = 1.0;
         let currentData = null;
+        let isDragging = false;
+        let dragStart = { x: 0, y: 0 };
+        let currentTranslate = { x: 0, y: 0 };
         
         function updateStatus(message) {
             document.getElementById('status').textContent = message;
@@ -646,6 +668,9 @@ function getWebviewContent() {
                     }
                 });
             });
+            
+            // Re-add mouse event listeners after graph update
+            addMouseEventListeners();
         }
         
         function applyFilters() {
@@ -657,6 +682,9 @@ function getWebviewContent() {
                 maxCommits: currentData?.filters?.maxCommits || 500,
                 maxBranches: currentData?.filters?.maxBranches || 20
             };
+            
+            // Show loading status
+            updateStatus('Applying filters...');
             
             vscode.postMessage({
                 command: 'applyFilters',
@@ -675,19 +703,23 @@ function getWebviewContent() {
         function zoomIn() {
             currentScale = Math.min(currentScale * 1.1, 3.0);
             applyZoom();
-            vscode.postMessage({ command: 'zoomIn' });
         }
         
         function zoomOut() {
             currentScale = Math.max(currentScale / 1.1, 0.5);
             applyZoom();
-            vscode.postMessage({ command: 'zoomOut' });
+        }
+        
+        function resetView() {
+            currentScale = 1.0;
+            currentTranslate = { x: 0, y: 0 };
+            applyZoom();
         }
         
         function applyZoom() {
             const svg = document.querySelector('.graph-svg');
             if (svg) {
-                svg.style.transform = \`scale(\${currentScale})\`;
+                svg.style.transform = \`scale(\${currentScale}) translate(\${currentTranslate.x}px, \${currentTranslate.y}px)\`;
                 svg.style.transformOrigin = 'center center';
             }
         }
@@ -696,21 +728,85 @@ function getWebviewContent() {
             const maxCommits = currentData?.filters?.maxCommits || 500;
             const maxBranches = currentData?.filters?.maxBranches || 20;
             
-            const commitsInput = prompt('Maximum commits to show:', maxCommits.toString());
-            const branchesInput = prompt('Maximum branches to show:', maxBranches.toString());
+            // Create a simple modal dialog
+            const modal = document.createElement('div');
+            modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; ' +
+                'background-color: rgba(0, 0, 0, 0.5); display: flex; justify-content: center; ' +
+                'align-items: center; z-index: 1000;';
             
-            if (commitsInput !== null && branchesInput !== null) {
+            const dialog = document.createElement('div');
+            dialog.style.cssText = 'background-color: var(--vscode-panel-background); ' +
+                'border: 1px solid var(--vscode-panel-border); border-radius: 8px; ' +
+                'padding: 20px; min-width: 300px;';
+            
+            dialog.innerHTML = '<h3 style="margin-top: 0; color: var(--vscode-foreground);">Set Limits</h3>' +
+                '<div style="margin-bottom: 15px;">' +
+                    '<label style="display: block; margin-bottom: 5px; color: var(--vscode-foreground);">Maximum commits:</label>' +
+                    '<input type="number" id="commitsInput" value="' + maxCommits + '" min="1" max="10000" ' +
+                           'style="width: 100%; padding: 8px; border: 1px solid var(--vscode-input-border); ' +
+                                  'background-color: var(--vscode-input-background); ' +
+                                  'color: var(--vscode-input-foreground); border-radius: 4px;">' +
+                '</div>' +
+                '<div style="margin-bottom: 20px;">' +
+                    '<label style="display: block; margin-bottom: 5px; color: var(--vscode-foreground);">Maximum branches:</label>' +
+                    '<input type="number" id="branchesInput" value="' + maxBranches + '" min="1" max="100" ' +
+                           'style="width: 100%; padding: 8px; border: 1px solid var(--vscode-input-border); ' +
+                                  'background-color: var(--vscode-input-background); ' +
+                                  'color: var(--vscode-input-foreground); border-radius: 4px;">' +
+                '</div>' +
+                '<div style="display: flex; gap: 10px; justify-content: flex-end;">' +
+                    '<button id="cancelBtn" class="btn" style="background-color: var(--vscode-button-secondaryBackground); ' +
+                                                              'color: var(--vscode-button-secondaryForeground);">Cancel</button>' +
+                    '<button id="applyBtn" class="btn">Apply</button>' +
+                '</div>';
+            
+            modal.appendChild(dialog);
+            document.body.appendChild(modal);
+            
+            // Focus on first input
+            const commitsInput = dialog.querySelector('#commitsInput');
+            commitsInput.focus();
+            
+            // Handle events
+            const cancelBtn = dialog.querySelector('#cancelBtn');
+            const applyBtn = dialog.querySelector('#applyBtn');
+            
+            const closeModal = () => {
+                document.body.removeChild(modal);
+            };
+            
+            cancelBtn.addEventListener('click', closeModal);
+            applyBtn.addEventListener('click', () => {
+                const commitsValue = parseInt(commitsInput.value) || 500;
+                const branchesValue = parseInt(dialog.querySelector('#branchesInput').value) || 20;
+                
                 const filters = {
                     ...currentData?.filters,
-                    maxCommits: parseInt(commitsInput) || 500,
-                    maxBranches: parseInt(branchesInput) || 20
+                    maxCommits: commitsValue,
+                    maxBranches: branchesValue
                 };
                 
                 vscode.postMessage({
                     command: 'applyFilters',
                     filters: filters
                 });
-            }
+                
+                closeModal();
+            });
+            
+            // Close on escape key
+            modal.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    closeModal();
+                }
+            });
+            
+            // Close on backdrop click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    closeModal();
+                }
+            });
         }
         
         // Handle messages from extension
@@ -731,6 +827,72 @@ function getWebviewContent() {
                     break;
             }
         });
+        
+        // Mouse wheel zoom functionality
+        function handleWheelZoom(event) {
+            event.preventDefault();
+            
+            const delta = event.deltaY;
+            const zoomFactor = 0.1;
+            
+            if (delta < 0) {
+                // Zoom in
+                currentScale = Math.min(currentScale * (1 + zoomFactor), 3.0);
+            } else {
+                // Zoom out
+                currentScale = Math.max(currentScale * (1 - zoomFactor), 0.5);
+            }
+            
+            applyZoom();
+        }
+        
+        // Mouse drag functionality
+        function handleMouseDown(event) {
+            if (event.button === 0) { // Left mouse button
+                isDragging = true;
+                dragStart.x = event.clientX - currentTranslate.x;
+                dragStart.y = event.clientY - currentTranslate.y;
+                
+                // Change cursor to indicate dragging
+                document.body.style.cursor = 'grabbing';
+                
+                event.preventDefault();
+            }
+        }
+        
+        function handleMouseMove(event) {
+            if (isDragging) {
+                currentTranslate.x = event.clientX - dragStart.x;
+                currentTranslate.y = event.clientY - dragStart.y;
+                applyZoom();
+            }
+        }
+        
+        function handleMouseUp(event) {
+            if (event.button === 0) { // Left mouse button
+                isDragging = false;
+                document.body.style.cursor = 'default';
+            }
+        }
+        
+        // Add event listeners for mouse interactions
+        function addMouseEventListeners() {
+            const graphContainer = document.getElementById('graphContainer');
+            
+            // Wheel zoom
+            graphContainer.addEventListener('wheel', handleWheelZoom, { passive: false });
+            
+            // Mouse drag
+            graphContainer.addEventListener('mousedown', handleMouseDown);
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+            
+            // Prevent context menu on right click
+            graphContainer.addEventListener('contextmenu', (e) => e.preventDefault());
+        }
+        
+        // Initialize mouse event listeners when the page loads
+        document.addEventListener('DOMContentLoaded', addMouseEventListeners);
         
         // Load initial data
         vscode.postMessage({ command: 'loadGitData' });
