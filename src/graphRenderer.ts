@@ -26,7 +26,7 @@ export class HorizontalGraphRenderer {
 
     // Layout constants
     private readonly COLUMN_GAP = 180;
-    private readonly ROW_GAP = 52;
+    private readonly ROW_GAP = 80; // Increased for better branch level separation
     private readonly NODE_RADIUS = 7;
     private readonly PADDING = { top: 96, right: 120, bottom: 96, left: 120 };
 
@@ -39,63 +39,43 @@ export class HorizontalGraphRenderer {
     }
 
     private assignLanes(): void {
-        // Assign lanes based on branch names from refs
-        const branchLanes = new Map<string, number>();
-        let nextLane = 0;
+        // Create hierarchical branch structure with main branches on different levels
+        const branchLevels = new Map<string, number>();
+        const branchHierarchy = this.createBranchHierarchy();
 
-        // First pass: assign lanes to commits with branch refs
-        // Prioritize main branches (main, master, develop) to get lower lane numbers
-        const mainBranches = ['main', 'master', 'develop'];
-        const branchPriority = new Map<string, number>();
-        
-        // Assign priority to main branches
-        mainBranches.forEach((branch, index) => {
-            branchPriority.set(branch, index);
-        });
-
-        // Collect all branch names and sort by priority
-        const allBranches = new Set<string>();
-        for (const commit of this.commits) {
-            const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
-            branchRefs.forEach(ref => {
-                const branchName = ref.replace('Branch ', '');
-                allBranches.add(branchName);
-            });
+        // Assign levels to branches based on hierarchy
+        let currentLevel = 0;
+        for (const [branchName, level] of branchHierarchy) {
+            branchLevels.set(branchName, level);
         }
 
-        // Sort branches by priority (main branches first, then alphabetically)
-        const sortedBranches = Array.from(allBranches).sort((a, b) => {
-            const priorityA = branchPriority.get(a) ?? 999;
-            const priorityB = branchPriority.get(b) ?? 999;
-            if (priorityA !== priorityB) {
-                return priorityA - priorityB;
-            }
-            return a.localeCompare(b);
-        });
-
-        // Assign lanes to sorted branches
-        sortedBranches.forEach(branchName => {
-            branchLanes.set(branchName, nextLane++);
-        });
-
-        // Second pass: propagate branch assignments forwards through first-parent chains
-        // Since commits are now in reverse chronological order, we propagate forwards
+        // First pass: assign lanes to commits with branch refs
         for (let i = 0; i < this.commits.length; i++) {
             const commit = this.commits[i];
             const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
             
             if (branchRefs.length > 0) {
                 const branchName = branchRefs[0].replace('Branch ', '');
-                this.laneAssignments.set(commit.hash, branchLanes.get(branchName) || 0);
+                const level = branchLevels.get(branchName) || 0;
+                this.laneAssignments.set(commit.hash, level);
                 
-                // Propagate forwards through first parent (which is now to the right)
-                if (commit.parents.length > 0) {
-                    this.propagateBranchForwards(commit.parents[0], branchLanes.get(branchName) || 0);
+                // For primary branch, propagate backwards to show continuity
+                const branchHierarchy = this.createBranchHierarchy();
+                const maxLevel = Math.max(...Array.from(branchHierarchy.values()));
+                const isPrimaryBranch = branchHierarchy.get(branchName) === maxLevel;
+                
+                if (isPrimaryBranch) {
+                    this.propagateMainBranchBackwards(commit.hash, level);
+                } else {
+                    // Propagate forwards through first parent (which is now to the right)
+                    if (commit.parents.length > 0) {
+                        this.propagateBranchForwards(commit.parents[0], level);
+                    }
                 }
             }
         }
 
-        // Third pass: assign lanes to remaining commits
+        // Second pass: assign lanes to remaining commits
         for (let i = 0; i < this.commits.length; i++) {
             const commit = this.commits[i];
             if (!this.laneAssignments.has(commit.hash)) {
@@ -109,8 +89,257 @@ export class HorizontalGraphRenderer {
             }
         }
 
-        // Fourth pass: handle merge commits better
+        // Third pass: handle merge commits better
         this.handleMergeCommits();
+    }
+
+    private propagateMainBranchBackwards(commitHash: string, lane: number): void {
+        // Find the commit and propagate backwards to show main branch continuity
+        const commitIndex = this.commits.findIndex(c => c.hash.startsWith(commitHash));
+        if (commitIndex === -1) return;
+
+        const commit = this.commits[commitIndex];
+        
+        // For main branch, we want to show it as a continuous line
+        // Look backwards through the commit history to find where main should start
+        for (let i = commitIndex + 1; i < this.commits.length; i++) {
+            const olderCommit = this.commits[i];
+            
+            // If this commit doesn't have a lane assigned yet, assign it to main
+            if (!this.laneAssignments.has(olderCommit.hash)) {
+                this.laneAssignments.set(olderCommit.hash, lane);
+            } else {
+                // If it already has a lane, check if it should be on main instead
+                const currentLane = this.laneAssignments.get(olderCommit.hash);
+                const branchHierarchy = this.createBranchHierarchy();
+                
+                // If this commit is not explicitly on a secondary branch, put it on primary
+                const branchRefs = olderCommit.refs.filter(ref => ref.startsWith('Branch '));
+                const maxLevel = Math.max(...Array.from(branchHierarchy.values()));
+                const secondaryLevel = maxLevel - 1;
+                
+                const isOnSecondaryBranch = branchRefs.some(ref => {
+                    const branchName = ref.replace('Branch ', '');
+                    return branchHierarchy.get(branchName) === secondaryLevel; // Secondary level
+                });
+                
+                if (!isOnSecondaryBranch && currentLane === secondaryLevel) {
+                    // Move from secondary lane to primary lane
+                    this.laneAssignments.set(olderCommit.hash, lane);
+                }
+            }
+        }
+    }
+
+    private createBranchHierarchy(): Map<string, number> {
+        const hierarchy = new Map<string, number>();
+        const allBranches = new Set<string>();
+        
+        // Collect all branch names
+        for (const commit of this.commits) {
+            const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
+            branchRefs.forEach(ref => {
+                const branchName = ref.replace('Branch ', '');
+                allBranches.add(branchName);
+            });
+        }
+
+        // Dynamic branch hierarchy detection
+        const branchList = Array.from(allBranches);
+        
+        // Find primary and secondary branches
+        const primaryBranch = this.findPrimaryBranch(branchList);
+        const secondaryBranches = this.findSecondaryBranches(branchList, primaryBranch);
+        
+        // Count total levels needed
+        const remainingBranches = branchList.filter(branch => 
+            branch !== primaryBranch && !secondaryBranches.includes(branch)
+        );
+        const patternGroups = this.groupBranchesByPatterns(remainingBranches);
+        const totalLevels = 2 + patternGroups.size + (remainingBranches.length - Array.from(patternGroups.values()).flat().length > 0 ? 1 : 0);
+        
+        // Assign levels with primary branch at the top (highest level number)
+        if (primaryBranch) {
+            hierarchy.set(primaryBranch, totalLevels - 1); // Primary at top
+        }
+        
+        // Secondary branches one level down
+        secondaryBranches.forEach(branch => {
+            hierarchy.set(branch, totalLevels - 2);
+        });
+
+        // Pattern-based branches
+        let level = totalLevels - 3;
+        for (const [pattern, branches] of patternGroups) {
+            branches.forEach(branch => {
+                hierarchy.set(branch, level);
+            });
+            level--;
+        }
+
+        // Remaining branches at the bottom
+        const unassignedBranches = branchList.filter(branch => !hierarchy.has(branch));
+        unassignedBranches.forEach(branch => {
+            hierarchy.set(branch, Math.max(0, level));
+        });
+
+        return hierarchy;
+    }
+
+    private findPrimaryBranch(branches: string[]): string | null {
+        // Find the branch with the most commits or longest history
+        const branchCommitCounts = new Map<string, number>();
+        
+        for (const commit of this.commits) {
+            const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
+            for (const ref of branchRefs) {
+                const branchName = ref.replace('Branch ', '');
+                branchCommitCounts.set(branchName, (branchCommitCounts.get(branchName) || 0) + 1);
+            }
+        }
+
+        // Find branch with most commits
+        let maxCommits = 0;
+        let primaryBranch: string | null = null;
+        
+        for (const [branch, count] of branchCommitCounts) {
+            if (count > maxCommits) {
+                maxCommits = count;
+                primaryBranch = branch;
+            }
+        }
+
+        return primaryBranch;
+    }
+
+    private findSecondaryBranches(branches: string[], primaryBranch: string | null): string[] {
+        if (!primaryBranch) return [];
+
+        const secondaryBranches: string[] = [];
+        
+        // Find branches that have commits that merge into the primary branch
+        for (const branch of branches) {
+            if (branch === primaryBranch) continue;
+            
+            // Check if this branch has commits that appear to merge into primary
+            const hasMergeCommits = this.commits.some(commit => {
+                const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
+                const branchNames = branchRefs.map(ref => ref.replace('Branch ', ''));
+                
+                // If commit is on primary branch and has multiple parents, it might be a merge
+                return branchNames.includes(primaryBranch) && 
+                       commit.parents.length > 1 &&
+                       this.isBranchInParents(commit, branch);
+            });
+
+            if (hasMergeCommits) {
+                secondaryBranches.push(branch);
+            }
+        }
+
+        return secondaryBranches;
+    }
+
+    private isBranchInParents(commit: any, branchName: string): boolean {
+        // Check if any parent commit is on the specified branch
+        for (const parentHash of commit.parents) {
+            const parentCommit = this.commits.find(c => c.hash.startsWith(parentHash));
+            if (parentCommit) {
+                const parentBranchRefs = parentCommit.refs.filter(ref => ref.startsWith('Branch '));
+                const parentBranchNames = parentBranchRefs.map(ref => ref.replace('Branch ', ''));
+                if (parentBranchNames.includes(branchName)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private groupBranchesByPatterns(branches: string[]): Map<string, string[]> {
+        const groups = new Map<string, string[]>();
+        
+        // Common branch patterns (case-insensitive)
+        const patterns = [
+            { name: 'Feature', prefixes: ['feature/', 'feat/', 'f/', 'feature-', 'feat-'] },
+            { name: 'Release', prefixes: ['release/', 'rel/', 'release-', 'rel-'] },
+            { name: 'Hotfix', prefixes: ['hotfix/', 'fix/', 'bugfix/', 'hotfix-', 'fix-', 'bugfix-'] },
+            { name: 'Bugfix', prefixes: ['bug/', 'bugfix/', 'bug-', 'bugfix-'] },
+            { name: 'Patch', prefixes: ['patch/', 'patch-'] }
+        ];
+
+        for (const pattern of patterns) {
+            const matchingBranches = branches.filter(branch => 
+                pattern.prefixes.some(prefix => 
+                    branch.toLowerCase().startsWith(prefix.toLowerCase())
+                )
+            );
+            
+            if (matchingBranches.length > 0) {
+                groups.set(pattern.name, matchingBranches);
+            }
+        }
+
+        return groups;
+    }
+
+    private generateLevelNames(branchHierarchy: Map<string, number>): string[] {
+        const levelNames: string[] = [];
+        const maxLevel = Math.max(...Array.from(branchHierarchy.values()));
+        
+        // Level names are indexed by level number (0 = bottom, maxLevel = top)
+        // Primary branch is at maxLevel (top)
+        const primaryBranch = Array.from(branchHierarchy.entries())
+            .find(([_, level]) => level === maxLevel)?.[0];
+        levelNames[maxLevel] = primaryBranch ? `${primaryBranch.charAt(0).toUpperCase() + primaryBranch.slice(1)}` : 'Primary';
+        
+        // Secondary branches are at maxLevel - 1
+        const secondaryBranches = Array.from(branchHierarchy.entries())
+            .filter(([_, level]) => level === maxLevel - 1)
+            .map(([name, _]) => name);
+        levelNames[maxLevel - 1] = secondaryBranches.length > 0 ? 
+            `${secondaryBranches[0].charAt(0).toUpperCase() + secondaryBranches[0].slice(1)}` : 'Secondary';
+        
+        // Pattern-based names for other levels
+        for (let level = maxLevel - 2; level >= 0; level--) {
+            const branchesAtLevel = Array.from(branchHierarchy.entries())
+                .filter(([_, l]) => l === level)
+                .map(([name, _]) => name);
+            
+            if (branchesAtLevel.length > 0) {
+                // Try to determine pattern from branch names
+                const pattern = this.detectPatternFromBranches(branchesAtLevel);
+                levelNames[level] = pattern || `Level ${level}`;
+            } else {
+                levelNames[level] = `Level ${level}`;
+            }
+        }
+        
+        return levelNames;
+    }
+
+    private detectPatternFromBranches(branches: string[]): string | null {
+        // Check for common patterns in branch names
+        const patterns = [
+            { name: 'Feature', prefixes: ['feature/', 'feat/', 'f/', 'feature-', 'feat-'] },
+            { name: 'Release', prefixes: ['release/', 'rel/', 'release-', 'rel-'] },
+            { name: 'Hotfix', prefixes: ['hotfix/', 'fix/', 'bugfix/', 'hotfix-', 'fix-', 'bugfix-'] },
+            { name: 'Bugfix', prefixes: ['bug/', 'bugfix/', 'bug-', 'bugfix-'] },
+            { name: 'Patch', prefixes: ['patch/', 'patch-'] }
+        ];
+
+        for (const pattern of patterns) {
+            const matchingBranches = branches.filter(branch => 
+                pattern.prefixes.some(prefix => 
+                    branch.toLowerCase().startsWith(prefix.toLowerCase())
+                )
+            );
+            
+            if (matchingBranches.length === branches.length) {
+                return pattern.name;
+            }
+        }
+
+        return null;
     }
 
     private propagateBranchForwards(parentHash: string, lane: number): void {
@@ -291,6 +520,12 @@ export class HorizontalGraphRenderer {
                         .branch-label:hover {
                             fill: var(--vscode-textLink-activeForeground);
                         }
+                        .level-label {
+                            fill: var(--vscode-descriptionForeground);
+                            font-size: 10px;
+                            font-weight: bold;
+                            opacity: 0.8;
+                        }
                         .tag-label {
                             fill: var(--vscode-descriptionForeground);
                             font-size: 10px;
@@ -380,7 +615,13 @@ export class HorizontalGraphRenderer {
     private renderRefBadge(ref: string, x: number, y: number): string {
         const isBranch = ref.startsWith('Branch ');
         const isTag = ref.startsWith('Tag ');
-        const text = ref.replace(/^(Branch|Tag)\s+/, '');
+        let text = ref.replace(/^(Branch|Tag)\s+/, '');
+        
+        // Handle special cases for better display
+        if (text === 'HEAD') {
+            text = 'HEAD';
+        }
+        
         const width = Math.max(50, text.length * 6 + 20);
         const height = 18;
         
@@ -408,6 +649,7 @@ export class HorizontalGraphRenderer {
 
     private renderBranchLabels(): string {
         const branchLanes = new Map<string, number>();
+        const branchHierarchy = this.createBranchHierarchy();
         
         // Collect branch information from commits
         for (const commit of this.commits) {
@@ -422,10 +664,27 @@ export class HorizontalGraphRenderer {
         }
         
         let svg = '';
-        const labelX = this.PADDING.left - 20;
+        const labelX = this.PADDING.left - 10; // Moved closer to avoid cutoff
+        const levelX = this.PADDING.left - 80; // Better positioning for level labels
+        
+        // Define dynamic level names based on actual branch hierarchy
+        const levelNames = this.generateLevelNames(branchHierarchy);
         
         for (const [branchName, lane] of branchLanes) {
             const y = this.PADDING.top + lane * this.ROW_GAP;
+            const level = branchHierarchy.get(branchName) || 0;
+            const levelName = levelNames[level] || 'Other';
+            
+            // Add level indicator (only if it's not empty and not "Other")
+            if (levelName && levelName !== 'Other') {
+                svg += `
+                    <text x="${levelX}" y="${y + 4}" class="level-label" text-anchor="end">
+                        ${levelName}
+                    </text>
+                `;
+            }
+            
+            // Add branch name
             svg += `
                 <text x="${labelX}" y="${y + 4}" class="branch-label" text-anchor="end">
                     ${branchName}
