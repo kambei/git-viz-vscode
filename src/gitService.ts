@@ -66,12 +66,16 @@ export class GitService {
                 command += ` ${filters.branch}`;
             }
             
+            if (filters.tag) {
+                command += ` ${filters.tag}`;
+            }
+            
             if (filters.author) {
                 command += ` --author="${filters.author}"`;
             }
             
             if (filters.message) {
-                command += ` --grep="${filters.message}"`;
+                command += ` --grep="${filters.message}" --regexp-ignore-case`;
             }
             
             console.log('Executing git command:', command);
