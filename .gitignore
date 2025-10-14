@@ -141,3 +141,5 @@ Thumbs.db
 *.temp
 
 .cursor/
+
+package-lock.json
