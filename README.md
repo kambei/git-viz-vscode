@@ -1,6 +1,6 @@
-# Git Viz - VS Code Extension
+# Git Viz - VS Code & Cursor Extension
 
-A Visual Studio Code extension for visualizing git repositories with interactive graphs and commit history.
+A Visual Studio Code and Cursor extension for visualizing git repositories with interactive graphs and commit history.
 
 ## Features
 
@@ -13,7 +13,7 @@ A Visual Studio Code extension for visualizing git repositories with interactive
 
 ### From VS Code Marketplace (Recommended)
 
-1. Open VS Code
+1. Open VS Code or Cursor
 2. Go to the Extensions view (`Ctrl+Shift+X`)
 3. Search for "Git Viz"
 4. Click Install
@@ -27,10 +27,11 @@ A Visual Studio Code extension for visualizing git repositories with interactive
 
 ## Usage
 
-1. Open a git repository in VS Code
-2. Right-click in the Explorer panel
-3. Select "Open Git Viz" from the context menu
-4. The Git Visualization panel will open with interactive features
+1. Open a git repository in VS Code or Cursor
+2. Open Git Viz using one of these methods:
+   - **Command Palette**: Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac) and type "Git Viz: Open"
+   - **Context Menu**: Right-click in the Explorer panel and select "Open Git Viz"
+3. The Git Visualization panel will open with interactive features
 
 ## Development
 
@@ -38,7 +39,7 @@ A Visual Studio Code extension for visualizing git repositories with interactive
 
 - Node.js (v16 or higher)
 - npm or yarn
-- Visual Studio Code
+- Visual Studio Code or Cursor
 
 ### Setup
 
