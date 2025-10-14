@@ -48,7 +48,7 @@ export class HorizontalGraphRenderer {
     }
 
     private assignLanes(): void {
-        // Simple branch hierarchy: main=0, dev=1, test=2, others=3+
+        // Dynamic branch hierarchy based on git relationships and patterns
         const branchLevels = new Map<string, number>();
         
         // Collect all unique branches
@@ -61,20 +61,8 @@ export class HorizontalGraphRenderer {
             });
         }
 
-        // Assign levels based on simple hierarchy
-        let currentLevel = 0;
-        for (const branch of allBranches) {
-            if (branch.toLowerCase() === 'main' || branch.toLowerCase() === 'master') {
-                branchLevels.set(branch, 0);
-            } else if (branch.toLowerCase() === 'dev' || branch.toLowerCase() === 'develop') {
-                branchLevels.set(branch, 1);
-            } else if (branch.toLowerCase() === 'test' || branch.toLowerCase() === 'testing') {
-                branchLevels.set(branch, 2);
-            } else {
-                branchLevels.set(branch, currentLevel + 3);
-                currentLevel++;
-            }
-        }
+        // Dynamic branch level assignment
+        this.assignDynamicBranchLevels(allBranches, branchLevels);
 
         // Assign lanes to commits
         for (const commit of this.commits) {
@@ -105,6 +93,134 @@ export class HorizontalGraphRenderer {
 
         // Ensure horizontal continuity for each branch
         this.ensureHorizontalContinuity();
+    }
+
+    private assignDynamicBranchLevels(allBranches: Set<string>, branchLevels: Map<string, number>): void {
+        const branchArray = Array.from(allBranches);
+        
+        // Step 1: Identify the main branch (most commits or common names)
+        const mainBranch = this.findMainBranch(branchArray);
+        if (mainBranch) {
+            branchLevels.set(mainBranch, 0);
+        }
+        
+        // Step 2: Analyze branch relationships and patterns
+        const branchAnalysis = this.analyzeBranchPatterns(branchArray);
+        
+        // Step 3: Assign levels based on analysis
+        let currentLevel = 1;
+        const processedBranches = new Set<string>();
+        
+        if (mainBranch) {
+            processedBranches.add(mainBranch);
+        }
+        
+        // Process branches by their analysis priority
+        const sortedBranches = branchArray
+            .filter(branch => branch !== mainBranch)
+            .sort((a, b) => {
+                const analysisA = branchAnalysis.get(a) || { priority: 0, commitCount: 0 };
+                const analysisB = branchAnalysis.get(b) || { priority: 0, commitCount: 0 };
+                
+                // Sort by priority first, then by commit count
+                if (analysisA.priority !== analysisB.priority) {
+                    return analysisB.priority - analysisA.priority;
+                }
+                return analysisB.commitCount - analysisA.commitCount;
+            });
+        
+        for (const branch of sortedBranches) {
+            if (!processedBranches.has(branch)) {
+                branchLevels.set(branch, currentLevel);
+                processedBranches.add(branch);
+                currentLevel++;
+            }
+        }
+    }
+
+    private findMainBranch(branches: string[]): string | null {
+        // Common main branch names
+        const mainBranchNames = ['main', 'master', 'trunk', 'develop'];
+        
+        // First, check for exact matches
+        for (const branch of branches) {
+            if (mainBranchNames.includes(branch.toLowerCase())) {
+                return branch;
+            }
+        }
+        
+        // If no exact match, find the branch with the most commits
+        const branchCommitCounts = new Map<string, number>();
+        
+        for (const commit of this.commits) {
+            const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
+            const branchNames = branchRefs.map(ref => ref.replace('Branch ', ''));
+            
+            for (const branchName of branchNames) {
+                branchCommitCounts.set(branchName, (branchCommitCounts.get(branchName) || 0) + 1);
+            }
+        }
+        
+        // Return the branch with the most commits
+        let maxCommits = 0;
+        let mainBranch: string | null = null;
+        
+        for (const [branch, count] of branchCommitCounts) {
+            if (count > maxCommits) {
+                maxCommits = count;
+                mainBranch = branch;
+            }
+        }
+        
+        return mainBranch;
+    }
+
+    private analyzeBranchPatterns(branches: string[]): Map<string, { priority: number; commitCount: number; patterns: string[] }> {
+        const analysis = new Map<string, { priority: number; commitCount: number; patterns: string[] }>();
+        
+        // Define pattern priorities (higher number = higher priority)
+        const patterns = [
+            { regex: /^(dev|develop|development)$/i, priority: 10, name: 'development' },
+            { regex: /^(test|testing|tests)$/i, priority: 9, name: 'testing' },
+            { regex: /^(staging|stage)$/i, priority: 8, name: 'staging' },
+            { regex: /^(hotfix|hot-fix)$/i, priority: 7, name: 'hotfix' },
+            { regex: /^(release|rel)$/i, priority: 6, name: 'release' },
+            { regex: /^(feature|feat)\//i, priority: 5, name: 'feature' },
+            { regex: /^(bugfix|fix|bug)\//i, priority: 4, name: 'bugfix' },
+            { regex: /^(chore|task)\//i, priority: 3, name: 'chore' },
+            { regex: /^(experiment|exp)\//i, priority: 2, name: 'experiment' },
+            { regex: /^(temp|temporary)\//i, priority: 1, name: 'temporary' }
+        ];
+        
+        // Count commits per branch
+        const branchCommitCounts = new Map<string, number>();
+        for (const commit of this.commits) {
+            const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
+            const branchNames = branchRefs.map(ref => ref.replace('Branch ', ''));
+            
+            for (const branchName of branchNames) {
+                branchCommitCounts.set(branchName, (branchCommitCounts.get(branchName) || 0) + 1);
+            }
+        }
+        
+        // Analyze each branch
+        for (const branch of branches) {
+            let priority = 0;
+            const matchedPatterns: string[] = [];
+            
+            // Check against patterns
+            for (const pattern of patterns) {
+                if (pattern.regex.test(branch)) {
+                    priority = Math.max(priority, pattern.priority);
+                    matchedPatterns.push(pattern.name);
+                }
+            }
+            
+            const commitCount = branchCommitCounts.get(branch) || 0;
+            analysis.set(branch, { priority, commitCount, patterns: matchedPatterns });
+        }
+        
+        return analysis;
     }
 
     private ensureHorizontalContinuity(): void {

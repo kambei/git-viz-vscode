@@ -6,7 +6,7 @@
   "publisher": "kambei",
   "icon": "media/main-icon.png",
   "engines": {
-    "vscode": "^1.74.0"
+    "vscode": "^1.40.0"
   },
   "categories": [
     "Other"
