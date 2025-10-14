@@ -202,28 +202,54 @@ const GitGraph: React.FC<{
 
     const colors = ['#1A73E8', '#34A853', '#FBBC05', '#E91E63', '#00ACC1', '#8E24AA', '#F4511E', '#7CB342'];
 
-    // Assign branches and colors
+    // Assign branches and colors with HEAD tracking
+    let currentBranch = 'main'; // Track the currently checked out branch
+    
     reversedCommits.forEach(commit => {
         const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
         const branchNames = branchRefs.map(ref => ref.replace('Branch ', ''));
         
-        if (branchNames.length > 0) {
-            const branchName = branchNames[0];
-            commitBranches[commit.hash] = branchName;
-            
-            if (!branchColors[branchName]) {
-                branchColors[branchName] = colors[nextColorIndex % colors.length];
-                branchLanes[branchName] = nextLane;
-                nextColorIndex++;
-                nextLane++;
-            }
-        } else {
-            const defaultBranch = 'main';
-            commitBranches[commit.hash] = defaultBranch;
-            if (!branchColors[defaultBranch]) {
-                branchColors[defaultBranch] = colors[0];
-                branchLanes[defaultBranch] = 0;
-            }
+        // Check if this commit has HEAD -> (indicating a branch checkout)
+        const headRef = commit.refs.find(ref => ref.includes('HEAD -> '));
+        if (headRef) {
+            const headBranch = headRef.replace('Branch HEAD -> ', '').trim();
+            currentBranch = headBranch;
+        }
+        
+        // Check for main branch indicators
+        const isMainBranch = branchNames.includes('main') || 
+                           branchNames.includes('origin/main') || 
+                           commit.refs.some(ref => ref.includes('main'));
+        
+        // Check for specific branch indicators
+        const isDevBranch = branchNames.includes('dev') || 
+                          branchNames.includes('origin/dev') ||
+                          commit.refs.some(ref => ref.includes('dev'));
+        
+        const isTestBranch = branchNames.includes('test') || 
+                           branchNames.includes('origin/test') ||
+                           commit.refs.some(ref => ref.includes('test'));
+        
+        let branchName = currentBranch; // Use current branch as default
+        
+        // Override with explicit branch detection if available
+        if (isTestBranch) {
+            branchName = 'test';
+        } else if (isDevBranch) {
+            branchName = 'dev';
+        } else if (isMainBranch) {
+            branchName = 'main';
+        } else if (branchNames.length > 0) {
+            branchName = branchNames[0];
+        }
+        
+        commitBranches[commit.hash] = branchName;
+        
+        if (!branchColors[branchName]) {
+            branchColors[branchName] = colors[nextColorIndex % colors.length];
+            branchLanes[branchName] = nextLane;
+            nextColorIndex++;
+            nextLane++;
         }
     });
 

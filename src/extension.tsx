@@ -96,6 +96,11 @@ export class GitService {
 
             console.log('GitService: Executing command:', command);
             const { stdout, stderr } = await this.executeGitCommand(command, 10000);
+            
+            // Also get reflog information to understand checkout history
+            console.log('GitService: Getting reflog information...');
+            const reflogCommand = `git reflog --all --date=iso --format="%H|%gD|%gs"`;
+            const { stdout: reflogStdout } = await this.executeGitCommand(reflogCommand, 5000);
 
             if (stderr) {
                 console.warn('Git command stderr:', stderr);
@@ -104,6 +109,28 @@ export class GitService {
             console.log('GitService: Parsing commits...');
             const commits: GitCommit[] = [];
             const lines = stdout.trim().split('\n');
+            
+            // Parse reflog to understand checkout history
+            const checkoutHistory: { [hash: string]: string } = {};
+            const reflogLines = reflogStdout.trim().split('\n');
+            
+            for (const reflogLine of reflogLines) {
+                if (!reflogLine.trim()) continue;
+                
+                const reflogParts = reflogLine.split('|');
+                if (reflogParts.length >= 3) {
+                    const [hash, date, message] = reflogParts;
+                    
+                    // Look for checkout messages
+                    if (message.includes('checkout: moving from') || message.includes('branch: Created from')) {
+                        const branchMatch = message.match(/moving from \w+ to (\w+)|Created from HEAD/);
+                        if (branchMatch) {
+                            const targetBranch = branchMatch[1] || 'main';
+                            checkoutHistory[hash] = targetBranch;
+                        }
+                    }
+                }
+            }
 
             for (const line of lines) {
                 if (!line.trim()) continue;
@@ -143,25 +170,35 @@ export class GitService {
                     parts.push(current);
                 }
 
-                if (parts.length < 7) continue;
+                if (parts.length < 6) continue;
 
-                const [hash, shortHash, author, authorEmail, date, parentHashes, refsRaw] = parts;
+                // Handle cases where refs might be missing (parts.length === 6) or present (parts.length >= 7)
+                const [hash, shortHash, author, authorEmail, date, parentHashes, refsRaw] = parts.length >= 7 
+                    ? parts 
+                    : [...parts, '']; // Add empty refs if missing
                 
                 const parents = parentHashes ? parentHashes.split(' ') : [];
                 
-                const refs = refsRaw
+                const refs = refsRaw && refsRaw.trim()
                     ? refsRaw
                         .trim()
                         .replace(/[()]/g, '')
                         .split(',')
                         .map(ref => {
                             const trimmedRef = ref.trim();
+                            if (!trimmedRef) return null;
+                            
                             if (trimmedRef.startsWith('HEAD -> ')) {
                                 return `Branch ${trimmedRef.replace('HEAD -> ', '')}`;
                             }
                             if (trimmedRef.startsWith('tag: ')) {
                                 return `Tag ${trimmedRef.replace('tag: ', '')}`;
                             }
+                            // Handle remote branches (origin/branch-name)
+                            if (trimmedRef.includes('/')) {
+                                return `Branch ${trimmedRef}`;
+                            }
+                            // Handle local branches
                             if (trimmedRef) {
                                 return `Branch ${trimmedRef}`;
                             }
@@ -170,6 +207,12 @@ export class GitService {
                         .filter((ref): ref is string => !!ref)
                     : [];
 
+                // Add checkout history information to refs
+                const enhancedRefs = [...refs];
+                if (checkoutHistory[hash]) {
+                    enhancedRefs.push(`Branch HEAD -> ${checkoutHistory[hash]}`);
+                }
+                
                 commits.push({
                     hash,
                     shortHash,
@@ -179,7 +222,7 @@ export class GitService {
                     fullMessage: '',
                     date: new Date(date),
                     parents,
-                    refs
+                    refs: enhancedRefs
                 });
             }
 
@@ -391,8 +434,8 @@ export function activate(context: vscode.ExtensionContext) {
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentGitService: GitService | undefined;
 let currentFilters: GitFilters = {
-    maxCommits: 20,
-    maxBranches: 5
+    maxCommits: 500,
+    maxBranches: 20
 };
 
 function openGitVisualization(context: vscode.ExtensionContext) {
@@ -1058,16 +1101,26 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             const commits = gitData.commits.slice(0, 50).reverse(); // Reverse to show oldest first
             const branchColors = ['#1A73E8', '#34A853', '#FBBC05', '#E91E63', '#00ACC1', '#8E24AA', '#F4511E', '#7CB342', '#795548', '#607D8B'];
             
-            // Create branch detection and lane assignment
-            const branchCommits = {};
-            const branchLanes = {};
+            // Create a proper git graph layout
             const commitPositions = {};
+            const branchLanes = {};
+            const commitToBranch = {};
+            const branchColorsMap = {};
             let nextLane = 0;
             
-            // First pass: identify branches and assign lanes based on refs
+            // First pass: identify branches based on refs and HEAD tracking
+            let currentBranch = 'main'; // Track the currently checked out branch
+            
             commits.forEach(commit => {
                 const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
                 const branchNames = branchRefs.map(ref => ref.replace('Branch ', ''));
+                
+                // Check if this commit has HEAD -> (indicating a branch checkout)
+                const headRef = commit.refs.find(ref => ref.includes('HEAD -> '));
+                if (headRef) {
+                    const headBranch = headRef.replace('Branch HEAD -> ', '').trim();
+                    currentBranch = headBranch;
+                }
                 
                 // Check for main branch indicators
                 const isMainBranch = branchNames.includes('main') || 
@@ -1083,24 +1136,40 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                                    branchNames.includes('origin/test') ||
                                    commit.refs.some(ref => ref.includes('test'));
                 
-                let branchName = 'main'; // Default
+                let branchName = currentBranch; // Use current branch as default
                 
+                // Override with explicit branch detection if available
                 if (isTestBranch) {
                     branchName = 'test';
                 } else if (isDevBranch) {
                     branchName = 'dev';
-                } else if (isMainBranch || branchNames.length === 0) {
+                } else if (isMainBranch) {
                     branchName = 'main';
                 } else if (branchNames.length > 0) {
                     branchName = branchNames[0];
                 }
                 
-                branchCommits[commit.hash] = branchName;
+                commitToBranch[commit.hash] = branchName;
                 
                 if (!branchLanes[branchName]) {
                     branchLanes[branchName] = nextLane;
+                    branchColorsMap[branchName] = branchColors[nextLane % branchColors.length];
                     nextLane++;
                 }
+            });
+            
+            // Second pass: assign positions using simple chronological layout
+            const maxLanes = Math.max(Object.keys(branchLanes).length, 1);
+            const commitSpacing = 1800 / commits.length;
+            const laneHeight = 600 / Math.max(maxLanes, 3);
+            
+            commits.forEach((commit, index) => {
+                const branchName = commitToBranch[commit.hash] || 'main';
+                const lane = branchLanes[branchName];
+                const x = 100 + index * commitSpacing;
+                const y = 150 + lane * laneHeight;
+                
+                commitPositions[commit.hash] = { x, y, branchName, lane };
             });
             
             // Ensure main branch gets lane 0
@@ -1115,20 +1184,6 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                 });
             }
             
-            // Second pass: assign positions based on chronological order and branch continuity
-            const maxLanes = Math.max(Object.keys(branchLanes).length, 1);
-            const commitSpacing = 1800 / commits.length;
-            const laneHeight = 600 / Math.max(maxLanes, 3);
-            
-            commits.forEach((commit, index) => {
-                const branchName = branchCommits[commit.hash] || 'main';
-                const lane = branchLanes[branchName];
-                const x = 100 + index * commitSpacing;
-                const y = 150 + lane * laneHeight;
-                
-                commitPositions[commit.hash] = { x, y, branchName, lane };
-            });
-            
             // Draw connections between commits - connect chronologically (older to newer)
             commits.forEach((commit, index) => {
                 if (index === commits.length - 1) return; // Skip last commit
@@ -1137,7 +1192,7 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                 const next = commitPositions[commits[index + 1].hash];
                 
                 if (current && next) {
-                    const color = branchColors[current.lane % branchColors.length];
+                    const color = branchColorsMap[current.branchName] || branchColors[current.lane % branchColors.length];
                     
                     // Draw connection line from older to newer commit (left to right)
                     const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -1156,7 +1211,7 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                 const pos = commitPositions[commit.hash];
                 if (!pos) return;
                 
-                const color = branchColors[pos.lane % branchColors.length];
+                const color = branchColorsMap[pos.branchName] || branchColors[pos.lane % branchColors.length];
                 
                 // Draw commit node
                 const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
