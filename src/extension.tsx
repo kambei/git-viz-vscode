@@ -49,13 +49,13 @@ export class GitService {
         }
     }
 
-    private async executeGitCommand(command: string, timeoutMs: number = 5000): Promise<{ stdout: string, stderr: string }> {
+    private async executeGitCommand(command: string, timeoutMs: number = 30000): Promise<{ stdout: string, stderr: string }> {
         console.log('GitService: Executing command:', command, 'in directory:', this.workspaceRoot);
         
         const gitPromise = execAsync(command, {
             cwd: this.workspaceRoot,
             encoding: 'utf8',
-            maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+            maxBuffer: 50 * 1024 * 1024, // 50MB buffer
             env: {
                 ...process.env,
                 GIT_PAGER: 'cat',
@@ -66,15 +66,20 @@ export class GitService {
         });
 
         const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error(`Git command timed out: ${command}`)), timeoutMs);
+            setTimeout(() => reject(new Error(`Git command timed out after ${timeoutMs}ms: ${command}`)), timeoutMs);
         });
 
         try {
             const result = await Promise.race([gitPromise, timeoutPromise]);
-            console.log('GitService: Command result:', { stdout: result.stdout.substring(0, 200), stderr: result.stderr });
+            console.log('GitService: Command completed successfully');
+            console.log('GitService: Output length:', result.stdout.length, 'Error length:', result.stderr.length);
+            if (result.stderr) {
+                console.log('GitService: Stderr:', result.stderr.substring(0, 500));
+            }
             return result;
         } catch (error) {
             console.error('GitService: Command failed:', error);
+            console.error('GitService: Error details:', error instanceof Error ? error.message : 'Unknown error');
             throw error;
         }
     }
@@ -144,12 +149,26 @@ export class GitService {
                 
                 const parents = parentHashes ? parentHashes.split(' ') : [];
                 
-                const refs = refsRaw ? refsRaw.trim().split(', ').map(ref => {
-                    if (ref.startsWith('HEAD -> ')) {
-                        return `Branch ${ref.replace('HEAD -> ', '')}`;
-                    }
-                    return `Branch ${ref}`;
-                }) : [];
+                const refs = refsRaw
+                    ? refsRaw
+                        .trim()
+                        .replace(/[()]/g, '')
+                        .split(',')
+                        .map(ref => {
+                            const trimmedRef = ref.trim();
+                            if (trimmedRef.startsWith('HEAD -> ')) {
+                                return `Branch ${trimmedRef.replace('HEAD -> ', '')}`;
+                            }
+                            if (trimmedRef.startsWith('tag: ')) {
+                                return `Tag ${trimmedRef.replace('tag: ', '')}`;
+                            }
+                            if (trimmedRef) {
+                                return `Branch ${trimmedRef}`;
+                            }
+                            return null;
+                        })
+                        .filter((ref): ref is string => !!ref)
+                    : [];
 
                 commits.push({
                     hash,
@@ -178,7 +197,9 @@ export class GitService {
 
         } catch (error) {
             console.error('Error getting commits:', error);
-            return [];
+            console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+            console.error('Error message:', error instanceof Error ? error.message : 'Unknown error');
+            throw error; // Re-throw to let the caller handle it
         }
     }
     
@@ -296,21 +317,41 @@ export function activate(context: vscode.ExtensionContext) {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (workspaceRoot) {
             try {
+                console.log('Testing GitService with workspace:', workspaceRoot);
                 const gitService = new GitService(workspaceRoot);
+                
+                console.log('Checking if git repository...');
                 const isGit = await gitService.isGitRepository();
-                console.log('Git repository check:', isGit);
+                console.log('Git repository check result:', isGit);
                 
                 if (isGit) {
+                    console.log('Testing git log command...');
                     const commits = await gitService.getCommits({ maxCommits: 5 });
                     console.log('Test commits loaded:', commits.length);
+                    console.log('Sample commit:', commits[0]);
+                    
                     vscode.window.showInformationMessage(`Found ${commits.length} commits in test`);
+                    
+                    // Test branches
+                    console.log('Testing branches...');
+                    const branches = await gitService.getBranches();
+                    console.log('Branches loaded:', branches.length);
+                    
+                    // Test authors
+                    console.log('Testing authors...');
+                    const authors = await gitService.getAuthors();
+                    console.log('Authors loaded:', authors.length);
+                    
                 } else {
                     vscode.window.showInformationMessage('Not a git repository');
                 }
             } catch (error) {
                 console.error('Git test failed:', error);
-                vscode.window.showErrorMessage(`Git test failed: ${error}`);
+                console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
+                vscode.window.showErrorMessage(`Git test failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
             }
+        } else {
+            vscode.window.showErrorMessage('No workspace folder found');
         }
     });
 
@@ -440,14 +481,14 @@ async function loadGitData() {
 
     console.log('Starting git data loading...');
     const loadTimeout = setTimeout(() => {
-        console.error('loadGitData timed out after 10 seconds');
+        console.error('loadGitData timed out after 30 seconds');
         if (currentPanel) {
             currentPanel.webview.postMessage({
                 command: 'updateStatus',
-                status: 'Error: Git data loading timed out'
+                status: 'Error: Git data loading timed out after 30 seconds'
             });
         }
-    }, 10000);
+    }, 30000);
 
     try {
         console.log('Checking if git repository...');
@@ -475,7 +516,12 @@ async function loadGitData() {
             console.log('Loaded commits:', commits.length);
         } catch (error) {
             console.error('Failed to load commits:', error);
-            commits = [];
+            console.error('Commit loading error details:', error instanceof Error ? error.message : 'Unknown error');
+            currentPanel.webview.postMessage({
+                command: 'updateStatus',
+                status: `Error loading commits: ${error instanceof Error ? error.message : 'Unknown error'}`
+            });
+            return; // Exit early if commits fail to load
         }
         
         console.log('Loading branches...');
@@ -485,7 +531,8 @@ async function loadGitData() {
             console.log('Loaded branches:', branches.length);
         } catch (error) {
             console.error('Failed to load branches:', error);
-            branches = [];
+            console.error('Branch loading error details:', error instanceof Error ? error.message : 'Unknown error');
+            // Continue even if branches fail
         }
         
         console.log('Loading authors...');
@@ -495,7 +542,8 @@ async function loadGitData() {
             console.log('Loaded authors:', authors.length);
         } catch (error) {
             console.error('Failed to load authors:', error);
-            authors = [];
+            console.error('Author loading error details:', error instanceof Error ? error.message : 'Unknown error');
+            // Continue even if authors fail
         }
 
         console.log('Clearing timeout and sending git data...');
@@ -853,7 +901,7 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             }
         });
         
-        function showAuthorPopup(author: string, event: MouseEvent) {
+        function showAuthorPopup(author, event) {
             const popup = document.createElement('div');
             popup.className = 'popup';
             popup.innerHTML = 
@@ -876,7 +924,7 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             }, 100);
         }
         
-        async function showCommitPopup(commit: any, event: MouseEvent) {
+        async function showCommitPopup(commit, event) {
             const popup = document.createElement('div');
             popup.className = 'popup';
             
@@ -1257,16 +1305,16 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
         console.log('Webview: Requesting initial git data...');
         vscode.postMessage({ command: 'loadGitData' });
         
-        // Fallback: if no data received in 5 seconds, show error
+        // Fallback: if no data received in 15 seconds, show error
         setTimeout(() => {
             if (!gitData) {
-                console.log('Webview: No git data received after 5 seconds, showing error');
+                console.log('Webview: No git data received after 15 seconds, showing error');
                 const loading = document.getElementById('loading');
                 if (loading) {
-                    loading.innerHTML = '<div class="error">Failed to load git data. Please try refreshing.</div>';
+                    loading.innerHTML = '<div class="error">Failed to load git data after 15 seconds. Please try refreshing or check the console for errors.</div>';
                 }
             }
-        }, 5000);
+        }, 15000);
     </script>
 </body>
 </html>`;
