@@ -476,8 +476,8 @@ export function activate(context: vscode.ExtensionContext) {
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentGitService: GitService | undefined;
 let currentFilters: GitFilters = {
-    maxCommits: 100000,
-    maxBranches: 500
+    maxCommits: 10000,  // Increased default limit for better coverage
+    maxBranches: 50   // Reduced default limit for better performance
 };
 
 function openGitVisualization(context: vscode.ExtensionContext) {
@@ -733,13 +733,14 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             background-color: var(--vscode-editor-background);
             margin: 0;
             padding: 0;
-            overflow: hidden;
+            overflow: auto;
         }
         
         .container {
             display: flex;
             flex-direction: column;
-            height: 100vh;
+            min-height: 100vh;
+            height: auto;
         }
         
         .toolbar {
@@ -780,13 +781,44 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
         
         .graph-container {
             flex: 1;
-            overflow: hidden;
+            overflow: auto;
             position: relative;
             cursor: grab;
+            min-width: fit-content;
+            width: auto;
+            height: 100%;
+            /* Ensure horizontal scrollbar is always visible */
+            overflow-x: auto;
+            overflow-y: auto;
         }
         
         .graph-container:active {
             cursor: grabbing;
+        }
+        
+        /* Custom scrollbar styling for better visibility */
+        .graph-container::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+        
+        .graph-container::-webkit-scrollbar-track {
+            background: #2d2d2d;
+            border-radius: 6px;
+        }
+        
+        .graph-container::-webkit-scrollbar-thumb {
+            background: #555;
+            border-radius: 6px;
+            border: 2px solid #2d2d2d;
+        }
+        
+        .graph-container::-webkit-scrollbar-thumb:hover {
+            background: #777;
+        }
+        
+        .graph-container::-webkit-scrollbar-corner {
+            background: #2d2d2d;
         }
         
         .loading {
@@ -813,9 +845,11 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
         }
         
         .git-svg {
-            width: 100%;
-            height: 100%;
+            min-width: 100%;
+            min-height: 100%;
             background: #1e1e1e;
+            width: auto;
+            height: auto;
         }
         
         .commit-node {
@@ -1216,17 +1250,28 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                 loading.style.display = 'none';
             }
             
-            // Clear previous content
-            if (container) {
-                container.innerHTML = '';
-            }
-            
             // Process commits and create proper branch lanes
             // Don't apply additional limits here - the backend already applied the limits
             // Git log with --reverse already gives us chronological order (oldest first)
-            console.log('renderGitGraph: Using commits from backend with filters:', gitData.filters);
-            console.log('renderGitGraph: Total commits from backend:', gitData.commits.length);
             const commits = gitData.commits; // Already in chronological order from git log --reverse
+            
+            // Performance optimization: limit rendering for very large datasets
+            const maxRenderCommits = 1000;
+            
+            // Clear previous content
+            if (container) {
+                container.innerHTML = '';
+                
+                // Add warning if commits are limited for performance
+                if (commits.length > maxRenderCommits) {
+                    const warningDiv = document.createElement('div');
+                    warningDiv.style.cssText = 'background: #ff9800; color: white; padding: 8px; text-align: center; font-size: 12px; margin-bottom: 8px;';
+                    warningDiv.textContent = 'Showing first ' + maxRenderCommits + ' commits out of ' + commits.length + ' total. Use filters to reduce the dataset for better performance.';
+                    container.appendChild(warningDiv);
+                }
+            }
+            console.log('renderGitGraph: Using commits from backend with filters:', gitData.filters);
+            console.log('renderGitGraph: Total commits from backend:', commits.length);
             console.log('renderGitGraph: Rendering', commits.length, 'commits in chronological order');
             if (commits.length > 0) {
                 console.log('renderGitGraph: First commit (oldest):', commits[0].hash, commits[0].message);
@@ -1241,20 +1286,17 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             const branchColorsMap = {};
             let nextLane = 0;
             
-            // Calculate spacing and dimensions before creating SVG
-            const maxLanes = Math.max(Object.keys(branchLanes).length, 1);
-            // Increase horizontal spacing for better readability with many commits
-            const commitSpacing = Math.max(200, 3000 / commits.length);
-            const laneHeight = 600 / Math.max(maxLanes, 3);
+            const commitsToRender = commits.length > maxRenderCommits 
+                ? commits.slice(0, maxRenderCommits) 
+                : commits;
             
-            // Calculate dynamic viewBox based on commit count and spacing
-            const totalWidth = Math.max(2000, 100 + commits.length * commitSpacing + 200);
-            const totalHeight = Math.max(800, 200 + maxLanes * laneHeight);
+            // Use larger spacing for better readability
+            const commitSpacing = 120; // Increased spacing for better readability
+            const laneHeight = 80; // Increased lane height for better readability
             
-            // Create SVG for git graph
+            // Create SVG for git graph - we'll set dimensions after branch lanes are calculated
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svg.className = 'git-svg';
-            svg.setAttribute('viewBox', '0 0 ' + totalWidth + ' ' + totalHeight);
             svg.style.width = '100%';
             svg.style.height = '100%';
             
@@ -1278,7 +1320,7 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             // First pass: identify branches based on refs and HEAD tracking
             let currentBranch = 'main'; // Track the currently checked out branch
             
-            commits.forEach(commit => {
+            commitsToRender.forEach(commit => {
                 const branchRefs = commit.refs.filter(ref => ref.startsWith('Branch '));
                 const branchNames = branchRefs.map(ref => ref.replace('Branch ', ''));
                 
@@ -1357,9 +1399,29 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                 }
             });
             
+            // Now calculate SVG dimensions after branch lanes are populated
+            const maxLanes = Math.max(Object.keys(branchLanes).length, 1);
+            const totalWidth = Math.max(2000, 100 + commitsToRender.length * commitSpacing + 200);
+            const totalHeight = Math.max(800, 200 + maxLanes * laneHeight);
+            
+            console.log('SVG Dimensions: width=' + totalWidth + ', height=' + totalHeight + ', maxLanes=' + maxLanes);
+            
+            // Set SVG to actual dimensions - no transforms needed
+            svg.setAttribute('viewBox', '0 0 ' + totalWidth + ' ' + totalHeight);
+            svg.setAttribute('width', totalWidth);
+            svg.setAttribute('height', totalHeight);
+            svg.style.width = totalWidth + 'px';
+            svg.style.height = totalHeight + 'px';
+            
+            // Disable auto-zoom - let the graph display at natural size
+            let initialScale = 1.0;
+            let initialTranslateX = 0;
+            
+            console.log('No auto-zoom - displaying graph at natural size');
+            
             // Second pass: assign positions using simple chronological layout
             
-            commits.forEach((commit, index) => {
+            commitsToRender.forEach((commit, index) => {
                 const branchName = commitToBranch[commit.hash] || 'main';
                 const lane = branchLanes[branchName];
                 const x = 100 + index * commitSpacing;
@@ -1381,11 +1443,11 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             }
             
             // Draw connections between commits - connect chronologically (older to newer)
-            commits.forEach((commit, index) => {
-                if (index === commits.length - 1) return; // Skip last commit
+            commitsToRender.forEach((commit, index) => {
+                if (index === commitsToRender.length - 1) return; // Skip last commit
                 
                 const current = commitPositions[commit.hash];
-                const next = commitPositions[commits[index + 1].hash];
+                const next = commitPositions[commitsToRender[index + 1].hash];
                 
                 if (current && next) {
                     const color = branchColorsMap[current.branchName] || branchColors[current.lane % branchColors.length];
@@ -1403,7 +1465,7 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             });
             
             // Draw commits
-            commits.forEach((commit, index) => {
+            commitsToRender.forEach((commit, index) => {
                 const pos = commitPositions[commit.hash];
                 if (!pos) return;
                 
@@ -1477,8 +1539,8 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             let isDragging = false;
             let startX = 0;
             let startY = 0;
-            let currentScale = 1;
-            let currentTranslateX = 0;
+            let currentScale = initialScale;
+            let currentTranslateX = initialTranslateX;
             let currentTranslateY = 0;
             
             // Mouse wheel zoom
@@ -1530,8 +1592,14 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                 svg.style.transformOrigin = '0 0';
             }
             
+            // No transforms needed - SVG is at natural size
+            console.log('SVG set to natural size: ' + totalWidth + 'x' + totalHeight);
+            
             if (container) {
                 container.appendChild(svg);
+                console.log('SVG appended to container. SVG children count: ' + svg.children.length);
+            } else {
+                console.error('Container not found!');
             }
         }
         
@@ -1560,7 +1628,7 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                 const maxCommitsInput = document.getElementById('max-commits');
                 const maxBranchesInput = document.getElementById('max-branches');
                 if (maxCommitsInput) {
-                    maxCommitsInput.value = gitData.filters.maxCommits || 500;
+                    maxCommitsInput.value = gitData.filters.maxCommits || 10000;
                 }
                 if (maxBranchesInput) {
                     maxBranchesInput.value = gitData.filters.maxBranches || 20;

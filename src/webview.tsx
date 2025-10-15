@@ -61,6 +61,50 @@ const Toolbar: React.FC<{
     </div>
 );
 
+const LimitsPanel: React.FC<{
+    maxCommits: number;
+    maxBranches: number;
+    onApplyLimits: (maxCommits: number, maxBranches: number) => void;
+    onClose: () => void;
+}> = ({ maxCommits, maxBranches, onApplyLimits, onClose }) => {
+    const [localMaxCommits, setLocalMaxCommits] = useState(maxCommits);
+    const [localMaxBranches, setLocalMaxBranches] = useState(maxBranches);
+
+    const handleApply = () => {
+        onApplyLimits(localMaxCommits, localMaxBranches);
+        onClose();
+    };
+
+    return (
+        <div className="limits-panel">
+            <div className="limit-group">
+                <label>Max Commits:</label>
+                <input 
+                    type="number" 
+                    value={localMaxCommits} 
+                    onChange={(e) => setLocalMaxCommits(parseInt(e.target.value) || 10000)}
+                    min="10" 
+                    max="10000"
+                />
+            </div>
+            <div className="limit-group">
+                <label>Max Branches:</label>
+                <input 
+                    type="number" 
+                    value={localMaxBranches} 
+                    onChange={(e) => setLocalMaxBranches(parseInt(e.target.value) || 50)}
+                    min="5" 
+                    max="100"
+                />
+            </div>
+            <div className="limit-actions">
+                <button className="btn" onClick={handleApply}>Apply</button>
+                <button className="btn" onClick={onClose}>Close</button>
+            </div>
+        </div>
+    );
+};
+
 const Filters: React.FC<{
     branches: GitBranch[];
     tags: GitTag[];
@@ -254,19 +298,40 @@ const GitGraph: React.FC<{
     });
 
     const maxLanes = Math.max(Object.keys(branchLanes).length, 1);
-    // Increase horizontal spacing for better readability with many commits
-    const commitSpacing = Math.max(200, 3000 / reversedCommits.length);
-    const width = Math.max(2000, 100 + reversedCommits.length * commitSpacing + 200);
-    const height = Math.max(800, 200 + maxLanes * 80);
+    
+    // Performance optimization: limit rendering for very large datasets
+    const maxRenderCommits = 1000;
+    const commitsToRender = reversedCommits.length > maxRenderCommits 
+        ? reversedCommits.slice(0, maxRenderCommits) 
+        : reversedCommits;
+    
+    // Use consistent spacing to prevent compression - fixed 80px between commits
+    const commitSpacing = 80; // Fixed spacing for readability
+    const width = Math.max(2000, 100 + commitsToRender.length * commitSpacing + 200);
+    const height = Math.max(800, 200 + maxLanes * 60);
 
     return (
-        <svg 
-            className="graph-svg" 
-            width={width} 
-            height={height}
-            viewBox={`0 0 ${width} ${height}`}
-            style={{ background: '#1e1e1e', fontFamily: "'Segoe UI', sans-serif" }}
-        >
+        <div>
+            {reversedCommits.length > maxRenderCommits && (
+                <div style={{ 
+                    background: '#ff9800', 
+                    color: 'white', 
+                    padding: '8px', 
+                    textAlign: 'center', 
+                    fontSize: '12px',
+                    marginBottom: '8px'
+                }}>
+                    Showing first {maxRenderCommits} commits out of {reversedCommits.length} total. 
+                    Use filters to reduce the dataset for better performance.
+                </div>
+            )}
+            <svg 
+                className="graph-svg" 
+                width={width} 
+                height={height}
+                viewBox={`0 0 ${width} ${height}`}
+                style={{ background: '#1e1e1e', fontFamily: "'Segoe UI', sans-serif" }}
+            >
             <defs>
                 <marker 
                     id="arrowhead" 
@@ -287,11 +352,11 @@ const GitGraph: React.FC<{
                 `}
             </style>
             
-            {reversedCommits.map((commit, index) => {
+            {commitsToRender.map((commit, index) => {
                 const x = 50 + index * commitSpacing;
                 const branchName = commitBranches[commit.hash] || 'main';
                 const lane = branchLanes[branchName] || 0;
-                const y = 100 + lane * 80;
+                const y = 100 + lane * 60;
                 const color = branchColors[branchName] || colors[0];
 
                 return (
@@ -299,7 +364,7 @@ const GitGraph: React.FC<{
                         {/* Connection line */}
                         {index > 0 && (
                             <path 
-                                d={`M ${50 + (index - 1) * commitSpacing} ${100 + (branchLanes[commitBranches[reversedCommits[index - 1].hash]] || 0) * 80} L ${x} ${y}`}
+                                d={`M ${50 + (index - 1) * commitSpacing} ${100 + (branchLanes[commitBranches[commitsToRender[index - 1].hash]] || 0) * 60} L ${x} ${y}`}
                                 stroke={color}
                                 strokeWidth="2"
                                 fill="none"
@@ -353,7 +418,8 @@ const GitGraph: React.FC<{
                     </g>
                 );
             })}
-        </svg>
+            </svg>
+        </div>
     );
 };
 
@@ -364,6 +430,7 @@ const GitVisualization: React.FC = () => {
     const [currentTranslate, setCurrentTranslate] = useState({ x: 0, y: 0 });
     const [isDragging, setIsDragging] = useState(false);
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+    const [showLimits, setShowLimits] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -377,6 +444,22 @@ const GitVisualization: React.FC = () => {
                 case 'updateGitData':
                     setData(message);
                     setStatus(message.status || 'Ready');
+                    
+                    // Auto-zoom to focus on latest commits for better view
+                    if (message.commits && message.commits.length > 20) {
+                        const zoomFactor = Math.min(1.5, Math.max(1.1, message.commits.length / 200));
+                        setCurrentScale(zoomFactor);
+                        
+                        // Focus on the latest commits (right side of the graph)
+                        const containerWidth = containerRef.current?.clientWidth || 800;
+                        const graphWidth = Math.max(2000, 100 + message.commits.length * 80 + 200);
+                        
+                        // Position to show the last 20-30 commits
+                        const commitsToShow = Math.min(25, message.commits.length);
+                        const latestCommitsStartX = graphWidth - (commitsToShow * 80);
+                        
+                        setCurrentTranslate({ x: -latestCommitsStartX, y: 0 });
+                    }
                     break;
                 case 'zoomIn':
                     zoomIn();
@@ -448,8 +531,22 @@ const GitVisualization: React.FC = () => {
     };
 
     const handleShowLimits = () => {
-        // Implementation for limits dialog
-        console.log('Show limits dialog');
+        setShowLimits(true);
+    };
+
+    const handleApplyLimits = (maxCommits: number, maxBranches: number) => {
+        const vscode = (window as any).acquireVsCodeApi();
+        vscode.postMessage({
+            command: 'applyFilters',
+            filters: {
+                maxCommits,
+                maxBranches
+            }
+        });
+    };
+
+    const handleCloseLimits = () => {
+        setShowLimits(false);
     };
 
     return (
@@ -461,6 +558,15 @@ const GitVisualization: React.FC = () => {
                 onZoomOut={zoomOut}
                 onZoomIn={zoomIn}
             />
+            
+            {showLimits && data && (
+                <LimitsPanel 
+                    maxCommits={data.filters.maxCommits || 10000}
+                    maxBranches={data.filters.maxBranches || 50}
+                    onApplyLimits={handleApplyLimits}
+                    onClose={handleCloseLimits}
+                />
+            )}
             
             {data && (
                 <Filters 
@@ -514,13 +620,14 @@ export const webviewStyles = `
         background-color: var(--vscode-editor-background);
         margin: 0;
         padding: 0;
-        overflow: hidden;
+        overflow: auto;
     }
     
     .container {
         display: flex;
         flex-direction: column;
-        height: 100vh;
+        min-height: 100vh;
+        height: auto;
     }
     
     .toolbar {
@@ -569,6 +676,49 @@ export const webviewStyles = `
         cursor: not-allowed;
     }
     
+    .limits-panel {
+        background-color: var(--vscode-panel-background);
+        border-bottom: 1px solid var(--vscode-panel-border);
+        padding: 12px 16px;
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    
+    .limit-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    .limit-group label {
+        font-size: 12px;
+        color: var(--vscode-descriptionForeground);
+        min-width: 80px;
+    }
+    
+    .limit-actions {
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
+    }
+    
+    input[type="number"] {
+        background-color: var(--vscode-input-background);
+        color: var(--vscode-input-foreground);
+        border: 1px solid var(--vscode-input-border);
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        min-width: 80px;
+    }
+    
+    input[type="number"]:focus {
+        outline: 1px solid var(--vscode-focusBorder);
+        outline-offset: -1px;
+    }
+    
     .filters {
         display: flex;
         gap: 8px;
@@ -604,15 +754,50 @@ export const webviewStyles = `
         overflow: auto;
         position: relative;
         cursor: grab;
+        min-width: fit-content;
+        width: auto;
+        height: 100%;
+        /* Ensure horizontal scrollbar is always visible */
+        overflow-x: auto;
+        overflow-y: auto;
     }
     
     .graph-container:active {
         cursor: grabbing;
     }
     
+    /* Custom scrollbar styling for better visibility */
+    .graph-container::-webkit-scrollbar {
+        width: 12px;
+        height: 12px;
+    }
+    
+    .graph-container::-webkit-scrollbar-track {
+        background: #2d2d2d;
+        border-radius: 6px;
+    }
+    
+    .graph-container::-webkit-scrollbar-thumb {
+        background: #555;
+        border-radius: 6px;
+        border: 2px solid #2d2d2d;
+    }
+    
+    .graph-container::-webkit-scrollbar-thumb:hover {
+        background: #777;
+    }
+    
+    .graph-container::-webkit-scrollbar-corner {
+        background: #2d2d2d;
+    }
+    
     .graph-svg {
         display: block;
         margin: 0 auto;
+        min-width: 100%;
+        min-height: 100%;
+        width: auto;
+        height: auto;
     }
     
     .loading {
