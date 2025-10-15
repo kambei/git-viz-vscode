@@ -27,8 +27,6 @@ export interface GitBranch {
 
 export interface GitFilters {
     branch?: string;
-    author?: string;
-    message?: string;
     maxCommits?: number;
     maxBranches?: number;
 }
@@ -88,11 +86,12 @@ export class GitService {
         try {
             console.log('GitService: Getting commits with filters:', filters);
 
-            const maxCommits = filters.maxCommits || 500;
+            const maxCommits = filters.maxCommits || 100000;
             const branch = filters.branch || '--all';
             
             const format = `"%H|%h|%an|%ae|%ad|%p|%d"`;
-            const command = `git log ${branch} --max-count=${maxCommits} --pretty=format:${format} --date=iso`;
+            // Use --reverse to get commits in chronological order (oldest first), then limit
+            const command = `git log ${branch} --reverse --max-count=${maxCommits} --pretty=format:${format} --date=iso`;
 
             console.log('GitService: Executing command:', command);
             const { stdout, stderr } = await this.executeGitCommand(command, 10000);
@@ -107,6 +106,8 @@ export class GitService {
             }
 
             console.log('GitService: Parsing commits...');
+            console.log('GitService: Raw git output length:', stdout.length);
+            console.log('GitService: Number of lines from git:', stdout.trim().split('\n').length);
             const commits: GitCommit[] = [];
             const lines = stdout.trim().split('\n');
             
@@ -226,6 +227,12 @@ export class GitService {
                 });
             }
 
+            // Git log with --reverse already gives us the oldest commits in chronological order
+            console.log(`GitService: maxCommits filter: ${maxCommits}, commits received: ${commits.length}`);
+            if (commits.length > 0) {
+                console.log(`GitService: First commit (oldest): ${commits[0].date}, Last commit (newest): ${commits[commits.length - 1].date}`);
+            }
+
             const commitMessages = await this.getCommitMessages(commits.map(c => c.hash));
             commits.forEach(commit => {
                 const msg = commitMessages[commit.hash];
@@ -270,9 +277,9 @@ export class GitService {
     }
 
 
-    async getBranches(): Promise<GitBranch[]> {
+    async getBranches(filters: GitFilters = {}): Promise<GitBranch[]> {
         try {
-            console.log('GitService: Getting branches...');
+            console.log('GitService: Getting branches with filters:', filters);
             const { stdout, stderr } = await this.executeGitCommand('git branch -a', 5000);
 
             if (stderr) {
@@ -295,6 +302,34 @@ export class GitService {
                         isCurrent: isCurrent
                     });
                 }
+            }
+
+            // Apply maxBranches limit if specified
+            const maxBranches = filters.maxBranches;
+            console.log(`GitService: maxBranches filter: ${maxBranches}, total branches: ${branches.length}`);
+            console.log(`GitService: All branch names:`, branches.map(b => `${b.name}${b.isCurrent ? ' (current)' : ''}`));
+            
+            // Always apply limiting if maxBranches is specified, even if branches.length <= maxBranches
+            if (maxBranches) {
+                console.log(`GitService: Applying branch limiting to ${maxBranches} branches`);
+                
+                // Sort branches to prioritize:
+                // 1. Current branch (highest priority)
+                // 2. Main/master branches (second priority)
+                // 3. Other branches (alphabetical order)
+                branches.sort((a, b) => {
+                    if (a.isCurrent) return -1;
+                    if (b.isCurrent) return 1;
+                    if (a.name === 'main' || a.name === 'master') return -1;
+                    if (b.name === 'main' || b.name === 'master') return 1;
+                    return a.name.localeCompare(b.name);
+                });
+                
+                const limitedBranches = branches.slice(0, maxBranches);
+                console.log(`GitService: Limited branches (${limitedBranches.length}):`, limitedBranches.map(b => `${b.name}${b.isCurrent ? ' (current)' : ''}`));
+                return limitedBranches;
+            } else {
+                console.log(`GitService: No branch limiting applied. Reason: maxBranches=${maxBranches}`);
             }
 
             return branches;
@@ -434,8 +469,8 @@ export function activate(context: vscode.ExtensionContext) {
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentGitService: GitService | undefined;
 let currentFilters: GitFilters = {
-    maxCommits: 500,
-    maxBranches: 20
+    maxCommits: 100000,
+    maxBranches: 500
 };
 
 function openGitVisualization(context: vscode.ExtensionContext) {
@@ -461,18 +496,27 @@ function openGitVisualization(context: vscode.ExtensionContext) {
             localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')]
         }
     );
+    console.log('Webview panel created:', !!currentPanel);
+    console.log('Webview panel webview:', !!currentPanel?.webview);
 
     console.log('Setting webview HTML...');
-    currentPanel.webview.html = getWebviewContent(context, currentPanel);
+    const htmlContent = getWebviewContent(context, currentPanel);
+    console.log('HTML content length:', htmlContent.length);
+    console.log('HTML content preview:', htmlContent.substring(0, 200));
+    currentPanel.webview.html = htmlContent;
 
     currentPanel.webview.onDidReceiveMessage(
         async message => {
+            console.log('Extension received message:', message);
+            console.log('Extension message command:', message.command);
             switch (message.command) {
                 case 'loadGitData':
                     await loadGitData();
                     break;
                 case 'applyFilters':
+                    console.log('Extension: Received applyFilters with:', message.filters);
                     currentFilters = message.filters;
+                    console.log('Extension: Updated currentFilters to:', currentFilters);
                     if (currentGitService) {
                         currentGitService.clearCache();
                     }
@@ -517,6 +561,8 @@ function openGitVisualization(context: vscode.ExtensionContext) {
 
 async function loadGitData() {
     console.log('loadGitData called');
+    console.log('loadGitData: currentPanel exists:', !!currentPanel);
+    console.log('loadGitData: currentGitService exists:', !!currentGitService);
     if (!currentPanel || !currentGitService) {
         console.log('Missing currentPanel or currentGitService:', { currentPanel: !!currentPanel, currentGitService: !!currentGitService });
         return;
@@ -570,7 +616,7 @@ async function loadGitData() {
         console.log('Loading branches...');
         let branches: GitBranch[] = [];
         try {
-            branches = await currentGitService.getBranches();
+            branches = await currentGitService.getBranches(currentFilters);
             console.log('Loaded branches:', branches.length);
         } catch (error) {
             console.error('Failed to load branches:', error);
@@ -602,6 +648,8 @@ async function loadGitData() {
             return;
         }
         
+        console.log('Sending git data to webview with filters:', currentFilters);
+        console.log('Commits count being sent:', commits.length);
         currentPanel.webview.postMessage({
             command: 'updateGitData',
             commits,
@@ -886,6 +934,53 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             font-size: 11px;
             margin: 2px;
         }
+        
+        .limits-panel {
+            background-color: var(--vscode-panel-background);
+            border-bottom: 1px solid var(--vscode-panel-border);
+            padding: 12px 16px;
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .limit-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .limit-group label {
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+            min-width: 60px;
+        }
+        
+        .limit-actions {
+            display: flex;
+            gap: 8px;
+            margin-left: auto;
+        }
+        
+        input[type="text"], input[type="number"], select {
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            min-width: 150px;
+        }
+        
+        input[type="number"] {
+            min-width: 80px;
+        }
+        
+        input:focus, select:focus {
+            outline: 1px solid var(--vscode-focusBorder);
+            outline-offset: -1px;
+        }
     </style>
 </head>
 <body>
@@ -893,34 +988,74 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
         <div class="toolbar">
             <div class="status" id="status">Loading git data...</div>
             <div class="controls">
+                <!-- <button class="btn" onclick="showLimits()">Limits</button> -->
                 <button class="btn" onclick="refreshData()">Refresh</button>
                 <button class="btn" onclick="zoomIn()">+</button>
                 <button class="btn" onclick="zoomOut()">-</button>
             </div>
         </div>
         
+        <!-- Limits panel commented out for now
+        <div class="limits-panel" id="limits-panel" style="display: none;">
+            <div class="limit-group">
+                <label>Max Commits:</label>
+                <input type="number" id="max-commits" value="500" min="10" max="10000">
+            </div>
+            <div class="limit-group">
+                <label>Max Branches:</label>
+                <input type="number" id="max-branches" value="20" min="5" max="100">
+            </div>
+            <div class="limit-actions">
+                <button class="btn" onclick="applyLimits()">Apply</button>
+                <button class="btn" onclick="hideLimits()">Close</button>
+            </div>
+        </div>
+        -->
+        
         <div class="graph-container" id="graph-container">
             <div class="loading" id="loading">Loading Git Visualization...</div>
+            <div id="debug-info" style="position: fixed; top: 10px; right: 10px; background: red; color: white; padding: 10px; z-index: 9999;">
+                Debug: Webview loaded
+            </div>
         </div>
     </div>
     
     <script>
+        console.log('Script started');
         const vscode = acquireVsCodeApi();
+        console.log('vscode API acquired');
         let gitData = null;
+        
+        // Update debug info
+        document.getElementById('debug-info').textContent = 'Script loaded, vscode API: ' + (typeof vscode);
         
         // Listen for messages from the extension
         window.addEventListener('message', event => {
             const message = event.data;
             console.log('Webview received message:', message);
+            console.log('Webview: Message command:', message.command);
             switch (message.command) {
                 case 'updateStatus':
                     console.log('Webview: Updating status to:', message.status);
-                    document.getElementById('status').textContent = message.status;
+                    const statusElement = document.getElementById('status');
+                    if (statusElement) {
+                        statusElement.textContent = message.status;
+                    }
                     break;
                 case 'updateGitData':
                     console.log('Webview: Received git data:', message);
+                    console.log('Webview: Number of commits received:', message.commits ? message.commits.length : 0);
+                    console.log('Webview: Filters received:', message.filters);
+                    if (message.commits && message.commits.length > 0) {
+                        console.log('Webview: First commit hash:', message.commits[0].hash);
+                        console.log('Webview: Last commit hash:', message.commits[message.commits.length - 1].hash);
+                    }
                     gitData = message;
-                    document.getElementById('status').textContent = message.status || 'Ready';
+                    const statusElement2 = document.getElementById('status');
+                    if (statusElement2) {
+                        statusElement2.textContent = message.status || 'Ready';
+                    }
+                    
                     console.log('Webview: Calling renderGitGraph...');
                     renderGitGraph();
                     break;
@@ -1063,20 +1198,56 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             
             if (!gitData || !gitData.commits || gitData.commits.length === 0) {
                 console.log('No git data or commits found');
-                loading.innerHTML = '<div class="error">No commits found</div>';
+                if (loading) {
+                    loading.innerHTML = '<div class="error">No commits found</div>';
+                }
                 return;
             }
             
             console.log('Rendering git graph with', gitData.commits.length, 'commits');
-            loading.style.display = 'none';
+            if (loading) {
+                loading.style.display = 'none';
+            }
             
             // Clear previous content
-            container.innerHTML = '';
+            if (container) {
+                container.innerHTML = '';
+            }
+            
+            // Process commits and create proper branch lanes
+            // Don't apply additional limits here - the backend already applied the limits
+            // Git log with --reverse already gives us chronological order (oldest first)
+            console.log('renderGitGraph: Using commits from backend with filters:', gitData.filters);
+            console.log('renderGitGraph: Total commits from backend:', gitData.commits.length);
+            const commits = gitData.commits; // Already in chronological order from git log --reverse
+            console.log('renderGitGraph: Rendering', commits.length, 'commits in chronological order');
+            if (commits.length > 0) {
+                console.log('renderGitGraph: First commit (oldest):', commits[0].hash, commits[0].message);
+                console.log('renderGitGraph: Last commit (newest):', commits[commits.length - 1].hash, commits[commits.length - 1].message);
+            }
+            const branchColors = ['#1A73E8', '#34A853', '#FBBC05', '#E91E63', '#00ACC1', '#8E24AA', '#F4511E', '#7CB342', '#795548', '#607D8B'];
+            
+            // Create a proper git graph layout
+            const commitPositions = {};
+            const branchLanes = {};
+            const commitToBranch = {};
+            const branchColorsMap = {};
+            let nextLane = 0;
+            
+            // Calculate spacing and dimensions before creating SVG
+            const maxLanes = Math.max(Object.keys(branchLanes).length, 1);
+            // Increase horizontal spacing for better readability with many commits
+            const commitSpacing = Math.max(200, 3000 / commits.length);
+            const laneHeight = 600 / Math.max(maxLanes, 3);
+            
+            // Calculate dynamic viewBox based on commit count and spacing
+            const totalWidth = Math.max(2000, 100 + commits.length * commitSpacing + 200);
+            const totalHeight = Math.max(800, 200 + maxLanes * laneHeight);
             
             // Create SVG for git graph
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svg.className = 'git-svg';
-            svg.setAttribute('viewBox', '0 0 2000 800');
+            svg.setAttribute('viewBox', '0 0 ' + totalWidth + ' ' + totalHeight);
             svg.style.width = '100%';
             svg.style.height = '100%';
             
@@ -1096,17 +1267,6 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             marker.appendChild(polygon);
             defs.appendChild(marker);
             svg.appendChild(defs);
-            
-            // Process commits and create proper branch lanes
-            const commits = gitData.commits.slice(0, 50).reverse(); // Reverse to show oldest first
-            const branchColors = ['#1A73E8', '#34A853', '#FBBC05', '#E91E63', '#00ACC1', '#8E24AA', '#F4511E', '#7CB342', '#795548', '#607D8B'];
-            
-            // Create a proper git graph layout
-            const commitPositions = {};
-            const branchLanes = {};
-            const commitToBranch = {};
-            const branchColorsMap = {};
-            let nextLane = 0;
             
             // First pass: identify branches based on refs and HEAD tracking
             let currentBranch = 'main'; // Track the currently checked out branch
@@ -1159,9 +1319,6 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             });
             
             // Second pass: assign positions using simple chronological layout
-            const maxLanes = Math.max(Object.keys(branchLanes).length, 1);
-            const commitSpacing = 1800 / commits.length;
-            const laneHeight = 600 / Math.max(maxLanes, 3);
             
             commits.forEach((commit, index) => {
                 const branchName = commitToBranch[commit.hash] || 'main';
@@ -1334,7 +1491,9 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                 svg.style.transformOrigin = '0 0';
             }
             
-            container.appendChild(svg);
+            if (container) {
+                container.appendChild(svg);
+            }
         }
         
         function showCommitDetails(commit) {
@@ -1356,8 +1515,75 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
             vscode.postMessage({ command: 'zoomOut' });
         }
         
+        function showLimits() {
+            // Update input values with current filters
+            if (gitData && gitData.filters) {
+                const maxCommitsInput = document.getElementById('max-commits');
+                const maxBranchesInput = document.getElementById('max-branches');
+                if (maxCommitsInput) {
+                    maxCommitsInput.value = gitData.filters.maxCommits || 500;
+                }
+                if (maxBranchesInput) {
+                    maxBranchesInput.value = gitData.filters.maxBranches || 20;
+                }
+            }
+            const limitsPanel = document.getElementById('limits-panel');
+            if (limitsPanel) {
+                limitsPanel.style.display = 'flex';
+            }
+        }
+        
+        function hideLimits() {
+            const limitsPanel = document.getElementById('limits-panel');
+            if (limitsPanel) {
+                limitsPanel.style.display = 'none';
+            }
+        }
+        
+        function applyLimits() {
+            const maxCommitsInput = document.getElementById('max-commits');
+            const maxBranchesInput = document.getElementById('max-branches');
+            
+            if (!maxCommitsInput || !maxBranchesInput) {
+                console.error('Could not find limit input elements');
+                return;
+            }
+            
+            const maxCommits = parseInt(maxCommitsInput.value);
+            const maxBranches = parseInt(maxBranchesInput.value);
+            
+            console.log('Applying limits:', { maxCommits, maxBranches });
+            
+            // Validate inputs
+            if (isNaN(maxCommits) || maxCommits < 10 || maxCommits > 10000) {
+                alert('Max Commits must be between 10 and 10000');
+                return;
+            }
+            if (isNaN(maxBranches) || maxBranches < 5 || maxBranches > 100) {
+                alert('Max Branches must be between 5 and 100');
+                return;
+            }
+            
+            // Update status to show we're applying limits
+            const statusElement3 = document.getElementById('status');
+            if (statusElement3) {
+                statusElement3.textContent = 'Applying limits...';
+            }
+            
+            vscode.postMessage({
+                command: 'applyFilters',
+                filters: {
+                    maxCommits: maxCommits,
+                    maxBranches: maxBranches
+                }
+            });
+            
+            hideLimits();
+        }
+        
         // Request initial data
         console.log('Webview: Requesting initial git data...');
+        console.log('Webview: vscode API available:', typeof vscode);
         vscode.postMessage({ command: 'loadGitData' });
         
         // Fallback: if no data received in 15 seconds, show error

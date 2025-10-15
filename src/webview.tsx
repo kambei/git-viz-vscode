@@ -254,8 +254,10 @@ const GitGraph: React.FC<{
     });
 
     const maxLanes = Math.max(Object.keys(branchLanes).length, 1);
-    const width = 100 + reversedCommits.length * 180;
-    const height = 200 + maxLanes * 80;
+    // Increase horizontal spacing for better readability with many commits
+    const commitSpacing = Math.max(200, 3000 / reversedCommits.length);
+    const width = Math.max(2000, 100 + reversedCommits.length * commitSpacing + 200);
+    const height = Math.max(800, 200 + maxLanes * 80);
 
     return (
         <svg 
@@ -286,7 +288,7 @@ const GitGraph: React.FC<{
             </style>
             
             {reversedCommits.map((commit, index) => {
-                const x = 50 + index * 180;
+                const x = 50 + index * commitSpacing;
                 const branchName = commitBranches[commit.hash] || 'main';
                 const lane = branchLanes[branchName] || 0;
                 const y = 100 + lane * 80;
@@ -297,7 +299,7 @@ const GitGraph: React.FC<{
                         {/* Connection line */}
                         {index > 0 && (
                             <path 
-                                d={`M ${50 + (index - 1) * 180} ${100 + (branchLanes[commitBranches[reversedCommits[index - 1].hash]] || 0) * 80} L ${x} ${y}`}
+                                d={`M ${50 + (index - 1) * commitSpacing} ${100 + (branchLanes[commitBranches[reversedCommits[index - 1].hash]] || 0) * 80} L ${x} ${y}`}
                                 stroke={color}
                                 strokeWidth="2"
                                 fill="none"
