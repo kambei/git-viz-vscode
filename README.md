@@ -90,3 +90,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 If you encounter any issues or have feature requests, please open an issue on GitHub.
+
+<br>
+
+## Support Me
+
+If you find this application helpful, consider supporting me on Ko-fi!
+
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kambei)
