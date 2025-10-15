@@ -91,9 +91,12 @@ export class GitService {
             
             const format = `"%H|%h|%an|%ae|%ad|%p|%d"`;
             // Use --reverse to get commits in chronological order (oldest first), then limit
-            const command = `git log ${branch} --reverse --max-count=${maxCommits} --pretty=format:${format} --date=iso`;
+            // Add --full-history to ensure merged commits are included
+            const command = `git log ${branch} --reverse --full-history --max-count=${maxCommits} --pretty=format:${format} --date=iso`;
 
             console.log('GitService: Executing command:', command);
+            console.log('GitService: Branch parameter:', branch);
+            console.log('GitService: Max commits limit:', maxCommits);
             const { stdout, stderr } = await this.executeGitCommand(command, 10000);
             
             // Also get reflog information to understand checkout history
@@ -108,6 +111,7 @@ export class GitService {
             console.log('GitService: Parsing commits...');
             console.log('GitService: Raw git output length:', stdout.length);
             console.log('GitService: Number of lines from git:', stdout.trim().split('\n').length);
+            console.log('GitService: First few lines of git output:', stdout.trim().split('\n').slice(0, 3));
             const commits: GitCommit[] = [];
             const lines = stdout.trim().split('\n');
             
@@ -171,7 +175,10 @@ export class GitService {
                     parts.push(current);
                 }
 
-                if (parts.length < 6) continue;
+                if (parts.length < 6) {
+                    console.log('GitService: Skipping line with insufficient parts:', parts.length, line.substring(0, 100));
+                    continue;
+                }
 
                 // Handle cases where refs might be missing (parts.length === 6) or present (parts.length >= 7)
                 const [hash, shortHash, author, authorEmail, date, parentHashes, refsRaw] = parts.length >= 7 
@@ -1298,15 +1305,47 @@ function getWebviewContent(context: vscode.ExtensionContext, panel: vscode.Webvi
                 
                 let branchName = currentBranch; // Use current branch as default
                 
-                // Override with explicit branch detection if available
-                if (isTestBranch) {
-                    branchName = 'test';
-                } else if (isDevBranch) {
-                    branchName = 'dev';
-                } else if (isMainBranch) {
-                    branchName = 'main';
-                } else if (branchNames.length > 0) {
-                    branchName = branchNames[0];
+                // Special handling for merge commits - they should return to main branch
+                const isMergeCommit = commit.message.toLowerCase().includes('merge pull request') || 
+                                    commit.message.toLowerCase().includes('merge branch') ||
+                                    commit.parents.length > 1;
+                
+                if (isMergeCommit) {
+                    // For merge commits, prioritize the target branch (usually main)
+                    if (isMainBranch) {
+                        branchName = 'main';
+                    } else if (isDevBranch) {
+                        branchName = 'dev';
+                    } else if (isTestBranch) {
+                        branchName = 'test';
+                    } else {
+                        // Default merge commits to main if no specific target branch detected
+                        branchName = 'main';
+                    }
+                    // Update currentBranch so subsequent commits stay on main lane
+                    currentBranch = branchName;
+                    console.log('GitService: Merge commit ' + commit.shortHash + ' assigned to branch: ' + branchName + ', updating currentBranch to: ' + currentBranch);
+                } else {
+                    // For non-merge commits, only change branch if there's an explicit checkout operation
+                    // or if this commit has explicit branch references
+                    const hasExplicitBranchRefs = branchNames.length > 0;
+                    const isCheckoutOperation = commit.message.toLowerCase().includes('checkout') || 
+                                             commit.refs.some(ref => ref.includes('HEAD -> '));
+                    
+                    if (isCheckoutOperation || hasExplicitBranchRefs) {
+                        // Override with explicit branch detection if available
+                        if (isTestBranch) {
+                            branchName = 'test';
+                        } else if (isDevBranch) {
+                            branchName = 'dev';
+                        } else if (isMainBranch) {
+                            branchName = 'main';
+                        } else if (branchNames.length > 0) {
+                            branchName = branchNames[0];
+                        }
+                        console.log('GitService: Branch change detected for commit ' + commit.shortHash + ' -> ' + branchName);
+                    }
+                    // Otherwise, keep the current branch assignment (stay on same lane)
                 }
                 
                 commitToBranch[commit.hash] = branchName;
