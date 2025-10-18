@@ -390,9 +390,27 @@
             search: null
         };
 
+        // Global click handler to close tooltips when clicking outside
+        function setupGlobalClickHandler() {
+            document.addEventListener('click', function(event) {
+                // Check if click is on a tooltip or tooltip trigger
+                const isTooltip = event.target.closest('.commit-tooltip, .author-tooltip');
+                const isTooltipTrigger = event.target.closest('.clickable-text, .commit-circle');
+                
+                if (!isTooltip && !isTooltipTrigger) {
+                    // Click is outside any tooltip, close all tooltips
+                    hideCommitTooltip();
+                    hideAuthorTooltip();
+                }
+            });
+        }
+
         // Initialize UI
         function initializeUI() {
-            console.log('Debug: Webview loaded');
+            console.log('Debug: Webview loaded - using real data mode');
+            
+            // Set up global click handler for tooltips
+            setupGlobalClickHandler();
             
             // Set up event listeners
             document.getElementById('maxCommits').addEventListener('change', updateFilters);
@@ -402,7 +420,7 @@
             document.getElementById('authorFilter').addEventListener('change', updateFilters);
             document.getElementById('reloadButton').addEventListener('click', reloadWebview);
             
-            // Request initial data from extension
+            // Request real data from extension
             vscode.postMessage({ command: 'loadGitData' });
         }
 
@@ -430,7 +448,9 @@
                 }
                 
                 // Apply filters to the original data
+                console.log('loadMockData: Applying filters to original data...');
                 const filteredData = applyFiltersToData(originalMockData);
+                console.log('loadMockData: Got filtered data:', filteredData);
                 
                 const mockData = {
                     ...filteredData,
@@ -438,8 +458,9 @@
                     status: `Showing ${filteredData.commits.length} commits • ${filteredData.branches.length} branches`
                 };
                 
-                console.log('Filtered mock data:', mockData);
+                console.log('loadMockData: Final mock data:', mockData);
                 updateGitData(mockData);
+                console.log('loadMockData: updateGitData called');
             } catch (error) {
                 console.error('Error generating mock data:', error);
                 updateStatus('Error generating mock data: ' + error.message);
@@ -448,35 +469,53 @@
 
         // Apply filters to the data
         function applyFiltersToData(data) {
+            console.log('=== applyFiltersToData called ===');
+            console.log('Input data:', data);
+            console.log('Current filters:', currentFilters);
+            
             let filteredCommits = [...data.commits];
             let filteredBranches = [...data.branches];
             let filteredAuthors = [...data.authors];
             
+            console.log('Initial counts - commits:', filteredCommits.length, 'branches:', filteredBranches.length, 'authors:', filteredAuthors.length);
+            
             // Apply maxCommits filter
             if (currentFilters.maxCommits && currentFilters.maxCommits < filteredCommits.length) {
                 filteredCommits = filteredCommits.slice(0, currentFilters.maxCommits);
+                console.log('Applied maxCommits filter, new count:', filteredCommits.length);
             }
             
             // Apply maxBranches filter
             if (currentFilters.maxBranches && currentFilters.maxBranches < filteredBranches.length) {
                 filteredBranches = filteredBranches.slice(0, currentFilters.maxBranches);
+                console.log('Applied maxBranches filter, new count:', filteredBranches.length);
             }
             
             // Apply branch filter
             if (currentFilters.branch) {
+                console.log('Applying branch filter for:', currentFilters.branch);
+                const beforeCount = filteredCommits.length;
                 filteredCommits = filteredCommits.filter(commit => commit.branch === currentFilters.branch);
+                console.log('Branch filter: commits before:', beforeCount, 'after:', filteredCommits.length);
                 // Update branch list to only include the selected branch
                 filteredBranches = filteredBranches.filter(branch => branch.name === currentFilters.branch);
+                console.log('Branch filter: branches after:', filteredBranches.length);
             }
             
             // Apply author filter
             if (currentFilters.author) {
+                console.log('Applying author filter for:', currentFilters.author);
+                const beforeCount = filteredCommits.length;
                 filteredCommits = filteredCommits.filter(commit => commit.author === currentFilters.author);
+                console.log('Author filter: commits before:', beforeCount, 'after:', filteredCommits.length);
             }
             
             // Apply showMerges filter
             if (!currentFilters.showMerges) {
+                console.log('Applying showMerges filter (hiding merges)');
+                const beforeCount = filteredCommits.length;
                 filteredCommits = filteredCommits.filter(commit => !commit.isMerge);
+                console.log('ShowMerges filter: commits before:', beforeCount, 'after:', filteredCommits.length);
             }
             
             // Update author commit counts based on filtered commits
@@ -491,11 +530,17 @@
                 commitCount: authorCommitCounts.get(author.name) || 0
             })).filter(author => author.commitCount > 0);
             
-            return {
+            const result = {
                 commits: filteredCommits,
                 branches: filteredBranches,
                 authors: filteredAuthors
             };
+            
+            console.log('=== applyFiltersToData result ===');
+            console.log('Final counts - commits:', result.commits.length, 'branches:', result.branches.length, 'authors:', result.authors.length);
+            console.log('Result data:', result);
+            
+            return result;
         }
 
         // Simple seeded random number generator
@@ -1258,7 +1303,7 @@
                 nodeElement.setAttribute('fill', node.color);
                 nodeElement.setAttribute('stroke', node.isCheckout ? '#FFD700' : 'var(--vscode-panel-border)');
                 nodeElement.setAttribute('stroke-width', '2');
-                nodeElement.classList.add('commit-node');
+                nodeElement.classList.add('commit-node', 'commit-circle');
                 
                 // Add click handler
                 nodeElement.addEventListener('click', (e) => {
@@ -1359,7 +1404,7 @@
             addMouseInteractions(svg);
             
             // Set initial zoom and pan to show latest commits
-            svg.style.transform = 'translate(-1200px, 0px) scale(2.0)';
+            svg.style.transform = 'translate(-1600px, 0px) scale(2.5)';
             
             return svg;
         }
@@ -1368,9 +1413,9 @@
         function addMouseInteractions(svg) {
             let isDragging = false;
             let startX, startY;
-            let currentTranslateX = -1200; // Start translated further to show latest commits
+            let currentTranslateX = -1600; // Start translated much further to show latest commits
             let currentTranslateY = 0;
-            let currentScale = 2.0; // Start more zoomed in
+            let currentScale = 2.5; // Start much more zoomed in
             
             svg.addEventListener('mousedown', (e) => {
                 isDragging = true;
@@ -1589,6 +1634,14 @@
                 circle.setAttribute('fill', '#007ACC');
                 circle.setAttribute('stroke', 'var(--vscode-panel-border)');
                 circle.setAttribute('stroke-width', '2');
+                circle.classList.add('commit-circle');
+                
+                // Add click handler for tooltip
+                circle.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    showCommitTooltip(commit, e);
+                });
+                
                 svg.appendChild(circle);
                 
                 // Draw line to next commit
