@@ -1,0 +1,1623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Git Visualization</title>
+    <style>
+        body {
+            font-family: var(--vscode-font-family);
+            font-size: var(--vscode-font-size);
+            color: var(--vscode-foreground);
+            background-color: var(--vscode-editor-background);
+            margin: 0;
+            padding: 20px;
+            overflow: hidden;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--vscode-panel-border);
+        }
+
+        .title {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--vscode-foreground);
+        }
+
+        .status {
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+            background-color: var(--vscode-input-background);
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--vscode-input-border);
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .control-group label {
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+        }
+
+        .control-group input, .control-group select {
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .control-group input:focus, .control-group select:focus {
+            outline: none;
+            border-color: var(--vscode-focusBorder);
+        }
+
+        .graph-container {
+            width: 100%;
+            height: calc(100vh - 200px);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 4px;
+            overflow: hidden;
+            background-color: var(--vscode-editor-background);
+            position: relative;
+        }
+
+        .graph-svg {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        .graph-svg:active {
+            cursor: grabbing;
+        }
+
+        .commit-node {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .commit-node:hover {
+            stroke-width: 3;
+            filter: brightness(1.2);
+        }
+
+        .commit-text {
+            font-family: var(--vscode-editor-font-family);
+            font-size: 11px;
+            fill: var(--vscode-foreground);
+            pointer-events: none;
+        }
+
+        .branch-label {
+            font-family: var(--vscode-editor-font-family);
+            font-size: 10px;
+            fill: var(--vscode-descriptionForeground);
+            pointer-events: none;
+        }
+
+        .commit-tooltip {
+            position: absolute;
+            background-color: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            z-index: 1000;
+            max-width: 400px;
+            pointer-events: none;
+            font-family: var(--vscode-font-family);
+        }
+
+        .tooltip-header {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: var(--vscode-foreground);
+            font-size: 14px;
+            border-bottom: 1px solid var(--vscode-panel-border);
+            padding-bottom: 4px;
+        }
+
+        .tooltip-branch {
+            color: var(--vscode-textLink-foreground);
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+
+        .tooltip-message {
+            color: var(--vscode-foreground);
+            margin-bottom: 8px;
+            word-wrap: break-word;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+
+        .tooltip-author {
+            color: var(--vscode-descriptionForeground);
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        .tooltip-date {
+            color: var(--vscode-descriptionForeground);
+            font-size: 11px;
+            margin-bottom: 8px;
+        }
+
+        .tooltip-files {
+            margin-top: 8px;
+            border-top: 1px solid var(--vscode-panel-border);
+            padding-top: 6px;
+        }
+
+        .tooltip-files-title {
+            font-weight: bold;
+            color: var(--vscode-foreground);
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+
+        .tooltip-file {
+            display: flex;
+            align-items: center;
+            margin-bottom: 2px;
+            font-size: 11px;
+        }
+
+        .tooltip-file-icon {
+            margin-right: 6px;
+            font-size: 12px;
+        }
+
+        .tooltip-file-name {
+            color: var(--vscode-foreground);
+            flex: 1;
+            word-break: break-all;
+        }
+
+        .tooltip-file-stats {
+            color: var(--vscode-descriptionForeground);
+            margin-left: 8px;
+            font-size: 10px;
+        }
+
+        .tooltip-file-added {
+            color: var(--vscode-gitDecoration-addedResourceForeground);
+        }
+
+        .tooltip-file-modified {
+            color: var(--vscode-gitDecoration-modifiedResourceForeground);
+        }
+
+        .tooltip-file-deleted {
+            color: var(--vscode-gitDecoration-deletedResourceForeground);
+        }
+
+        .author-tooltip {
+            position: absolute;
+            background-color: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            z-index: 1000;
+            max-width: 300px;
+            pointer-events: none;
+            font-family: var(--vscode-font-family);
+        }
+
+        .author-tooltip-header {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: var(--vscode-foreground);
+            font-size: 14px;
+            border-bottom: 1px solid var(--vscode-panel-border);
+            padding-bottom: 4px;
+        }
+
+        .author-tooltip-name {
+            color: var(--vscode-foreground);
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+
+        .author-tooltip-email {
+            color: var(--vscode-textLink-foreground);
+            margin-bottom: 6px;
+            font-size: 11px;
+        }
+
+        .author-tooltip-stats {
+            color: var(--vscode-descriptionForeground);
+            font-size: 11px;
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            color: var(--vscode-descriptionForeground);
+        }
+
+        .clickable-text {
+            cursor: pointer;
+            fill: var(--vscode-textLink-foreground);
+            text-decoration: underline;
+            transition: fill 0.2s ease;
+        }
+
+        .clickable-text:hover {
+            fill: var(--vscode-textLink-activeForeground);
+        }
+
+        .btn {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+
+        .btn:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+
+        .error {
+            color: var(--vscode-errorForeground);
+            background-color: var(--vscode-inputValidation-errorBackground);
+            border: 1px solid var(--vscode-inputValidation-errorBorder);
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+
+        .info-panel {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+        }
+
+        .info-item {
+            display: flex;
+            gap: 5px;
+        }
+
+        .info-value {
+            color: var(--vscode-foreground);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title">Git Visualization</div>
+        <div class="status" id="status">Loading...</div>
+    </div>
+
+    <div class="controls">
+        <div class="control-group">
+            <label for="maxCommits">Max Commits</label>
+            <input type="number" id="maxCommits" value="100" min="10" max="1000">
+        </div>
+        <div class="control-group">
+            <label for="maxBranches">Max Branches</label>
+            <input type="number" id="maxBranches" value="10" min="1" max="50">
+        </div>
+        <div class="control-group">
+            <label for="showMerges">Show Merges</label>
+            <select id="showMerges">
+                <option value="true">Yes</option>
+                <option value="false">No</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label for="branchFilter">Branch</label>
+            <select id="branchFilter">
+                <option value="">All Branches</option>
+            </select>
+        </div>
+         <div class="control-group">
+             <label for="authorFilter">Author</label>
+             <select id="authorFilter">
+                 <option value="">All Authors</option>
+             </select>
+         </div>
+         <div class="control-group">
+             <button id="reloadButton" class="btn">🔄 Reload</button>
+         </div>
+    </div>
+
+    <div class="graph-container" id="graphContainer">
+        <div class="loading" id="loading">Loading git data...</div>
+    </div>
+
+    <div class="info-panel">
+        <div class="info-item">
+            <span>Commits:</span>
+            <span class="info-value" id="commitCount">0</span>
+        </div>
+        <div class="info-item">
+            <span>Branches:</span>
+            <span class="info-value" id="branchCount">0</span>
+        </div>
+        <div class="info-item">
+            <span>Authors:</span>
+            <span class="info-value" id="authorCount">0</span>
+        </div>
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        
+        let currentGitData = null;
+        let currentFilters = {
+            maxCommits: 100,
+            maxBranches: 10,
+            maxAuthors: 20,
+            showMerges: true,
+            showTags: true,
+            showStashes: false,
+            dateRange: null,
+            author: null,
+            branch: null,
+            search: null
+        };
+
+        // Initialize UI
+        function initializeUI() {
+            console.log('Debug: Webview loaded');
+            
+            // Set up event listeners
+            document.getElementById('maxCommits').addEventListener('change', updateFilters);
+            document.getElementById('maxBranches').addEventListener('change', updateFilters);
+            document.getElementById('showMerges').addEventListener('change', updateFilters);
+            document.getElementById('branchFilter').addEventListener('change', updateFilters);
+            document.getElementById('authorFilter').addEventListener('change', updateFilters);
+            document.getElementById('reloadButton').addEventListener('click', reloadWebview);
+            
+            // Request initial data from extension
+            vscode.postMessage({ command: 'loadGitData' });
+        }
+
+        // Store original mock data to avoid regenerating
+        let originalMockData = null;
+
+        // Load mock data for testing
+        function loadMockData() {
+            console.log('=== loadMockData called ===');
+            console.log('Loading mock Git data...');
+            
+            try {
+                // Generate data only once
+                if (!originalMockData) {
+                    const mockCommits = generateMockCommits();
+                    const mockBranches = generateMockBranches();
+                    const mockAuthors = generateMockAuthors();
+                    
+                    originalMockData = {
+                        commits: mockCommits,
+                        branches: mockBranches,
+                        authors: mockAuthors
+                    };
+                    console.log('Generated original mock data:', originalMockData);
+                }
+                
+                // Apply filters to the original data
+                const filteredData = applyFiltersToData(originalMockData);
+                
+                const mockData = {
+                    ...filteredData,
+                    filters: currentFilters,
+                    status: `Showing ${filteredData.commits.length} commits • ${filteredData.branches.length} branches`
+                };
+                
+                console.log('Filtered mock data:', mockData);
+                updateGitData(mockData);
+            } catch (error) {
+                console.error('Error generating mock data:', error);
+                updateStatus('Error generating mock data: ' + error.message);
+            }
+        }
+
+        // Apply filters to the data
+        function applyFiltersToData(data) {
+            let filteredCommits = [...data.commits];
+            let filteredBranches = [...data.branches];
+            let filteredAuthors = [...data.authors];
+            
+            // Apply maxCommits filter
+            if (currentFilters.maxCommits && currentFilters.maxCommits < filteredCommits.length) {
+                filteredCommits = filteredCommits.slice(0, currentFilters.maxCommits);
+            }
+            
+            // Apply maxBranches filter
+            if (currentFilters.maxBranches && currentFilters.maxBranches < filteredBranches.length) {
+                filteredBranches = filteredBranches.slice(0, currentFilters.maxBranches);
+            }
+            
+            // Apply branch filter
+            if (currentFilters.branch) {
+                filteredCommits = filteredCommits.filter(commit => commit.branch === currentFilters.branch);
+                // Update branch list to only include the selected branch
+                filteredBranches = filteredBranches.filter(branch => branch.name === currentFilters.branch);
+            }
+            
+            // Apply author filter
+            if (currentFilters.author) {
+                filteredCommits = filteredCommits.filter(commit => commit.author === currentFilters.author);
+            }
+            
+            // Apply showMerges filter
+            if (!currentFilters.showMerges) {
+                filteredCommits = filteredCommits.filter(commit => !commit.isMerge);
+            }
+            
+            // Update author commit counts based on filtered commits
+            const authorCommitCounts = new Map();
+            filteredCommits.forEach(commit => {
+                const count = authorCommitCounts.get(commit.author) || 0;
+                authorCommitCounts.set(commit.author, count + 1);
+            });
+            
+            filteredAuthors = filteredAuthors.map(author => ({
+                ...author,
+                commitCount: authorCommitCounts.get(author.name) || 0
+            })).filter(author => author.commitCount > 0);
+            
+            return {
+                commits: filteredCommits,
+                branches: filteredBranches,
+                authors: filteredAuthors
+            };
+        }
+
+        // Simple seeded random number generator
+        function seededRandom(seed) {
+            const x = Math.sin(seed) * 10000;
+            return x - Math.floor(x);
+        }
+
+        // Generate deterministic mock commits with progressive branch structure
+        function generateMockCommits() {
+            const authors = [
+                { name: 'John Doe', email: 'john.doe@company.com' },
+                { name: 'Jane Smith', email: 'jane.smith@company.com' },
+                { name: 'Mike Johnson', email: 'mike.johnson@company.com' },
+                { name: 'Sarah Wilson', email: 'sarah.wilson@company.com' },
+                { name: 'Alex Brown', email: 'alex.brown@company.com' }
+            ];
+            
+            // Progressive branch structure
+            const branchStructure = [
+                { name: 'main', level: 0, parent: null },
+                { name: 'develop', level: 1, parent: 'main' },
+                { name: 'feature/user-auth', level: 2, parent: 'develop' },
+                { name: 'feature/user-auth/login', level: 3, parent: 'feature/user-auth' },
+                { name: 'feature/user-auth/oauth', level: 3, parent: 'feature/user-auth' },
+                { name: 'feature/payment', level: 2, parent: 'develop' },
+                { name: 'feature/payment/stripe', level: 3, parent: 'feature/payment' },
+                { name: 'feature/payment/paypal', level: 3, parent: 'feature/payment' },
+                { name: 'feature/dashboard', level: 2, parent: 'develop' },
+                { name: 'feature/dashboard/analytics', level: 3, parent: 'feature/dashboard' },
+                { name: 'feature/dashboard/reports', level: 3, parent: 'feature/dashboard' },
+                { name: 'bugfix/login-issue', level: 2, parent: 'develop' },
+                { name: 'bugfix/login-issue/validation', level: 3, parent: 'bugfix/login-issue' },
+                { name: 'hotfix/security-patch', level: 1, parent: 'main' },
+                { name: 'hotfix/security-patch/auth', level: 2, parent: 'hotfix/security-patch' }
+            ];
+            
+            const commitMessages = [
+                'Initial commit with project setup',
+                'Add user authentication system',
+                'Implement login functionality',
+                'Fix login validation bug',
+                'Add password reset feature',
+                'Update user profile management',
+                'Implement payment processing',
+                'Add credit card validation',
+                'Fix payment gateway integration',
+                'Add invoice generation',
+                'Update database schema',
+                'Add user roles and permissions',
+                'Implement admin dashboard',
+                'Add user activity logging',
+                'Fix security vulnerability',
+                'Update API documentation',
+                'Add unit tests for auth module',
+                'Implement two-factor authentication',
+                'Add email notifications',
+                'Update UI components',
+                'Fix responsive design issues',
+                'Add dark mode support',
+                'Implement search functionality',
+                'Add data export feature',
+                'Update error handling',
+                'Add performance optimizations',
+                'Implement caching system',
+                'Add monitoring and analytics',
+                'Update deployment scripts',
+                'Add Docker configuration',
+                'Checkout: Working on feature branch',
+                'Switch: Moving to development',
+                'Checkout: Bug fix in progress',
+                'Switch: Feature development',
+                'Checkout: Hotfix deployment',
+                'Switch: Code review branch',
+                'Checkout: Testing environment',
+                'Switch: Staging branch',
+                'Checkout: Production hotfix',
+                'Switch: Main branch',
+                'Merge feature/user-auth into develop',
+                'Merge develop into main',
+                'Merge feature/payment into develop',
+                'Merge bugfix/login-issue into develop',
+                'Merge hotfix/security-patch into main',
+                'Merge feature/dashboard into develop',
+                'Merge feature/user-auth/login into feature/user-auth',
+                'Merge feature/payment/stripe into feature/payment',
+                'Merge feature/dashboard/analytics into feature/dashboard',
+                'Merge bugfix/login-issue/validation into bugfix/login-issue'
+            ];
+            
+            const commits = [];
+            const now = new Date();
+            const seed = 12345;
+            
+            // Create commits with progressive branch assignment
+            for (let i = 0; i < 60; i++) {
+                // Determine branch based on commit index and progression
+                let branch = 'main';
+                let branchLevel = 0;
+                
+                if (i < 5) {
+                    // Initial commits on main
+                    branch = 'main';
+                    branchLevel = 0;
+                } else if (i < 15) {
+                    // Develop branch commits
+                    branch = 'develop';
+                    branchLevel = 1;
+                } else if (i < 25) {
+                    // Feature branch commits
+                    const featureBranches = branchStructure.filter(b => b.level === 2);
+                    const branchIndex = Math.floor(seededRandom(seed + i) * featureBranches.length);
+                    branch = featureBranches[branchIndex].name;
+                    branchLevel = 2;
+                } else if (i < 40) {
+                    // Sub-feature branch commits
+                    const subFeatureBranches = branchStructure.filter(b => b.level === 3);
+                    const branchIndex = Math.floor(seededRandom(seed + i) * subFeatureBranches.length);
+                    branch = subFeatureBranches[branchIndex].name;
+                    branchLevel = 3;
+                } else if (i < 50) {
+                    // Mix of different levels
+                    const allBranches = branchStructure.filter(b => b.level > 0);
+                    const branchIndex = Math.floor(seededRandom(seed + i) * allBranches.length);
+                    branch = allBranches[branchIndex].name;
+                    branchLevel = allBranches[branchIndex].level;
+                } else {
+                    // Final commits - merges and checkouts
+                    const mergeBranches = ['main', 'develop'];
+                    const branchIndex = Math.floor(seededRandom(seed + i) * mergeBranches.length);
+                    branch = mergeBranches[branchIndex];
+                    branchLevel = branchIndex;
+                }
+                
+                // Select author based on branch level (different authors for different levels)
+                const authorIndex = Math.floor(seededRandom(seed + i + 100) * authors.length);
+                const author = authors[authorIndex];
+                
+                // Select message based on branch type
+                let message;
+                if (branch.includes('merge') || commitMessages[i]?.includes('Merge')) {
+                    message = commitMessages[i] || 'Merge commit';
+                } else if (branch.includes('checkout') || commitMessages[i]?.includes('Checkout')) {
+                    message = commitMessages[i] || 'Checkout commit';
+                } else {
+                    const messageIndex = Math.floor(seededRandom(seed + i + 200) * commitMessages.length);
+                    message = commitMessages[messageIndex];
+                }
+                
+                // Create deterministic date progression
+                const daysAgo = Math.floor(seededRandom(seed + i + 300) * 90);
+                const hoursAgo = Math.floor(seededRandom(seed + i + 400) * 24);
+                const commitDate = new Date(now.getTime() - (daysAgo * 24 + hoursAgo) * 60 * 60 * 1000);
+                
+                // Generate deterministic file changes
+                const fileChanges = generateFileChanges(seed + i + 500);
+                
+                const commit = {
+                    hash: generateDeterministicHash(i),
+                    shortHash: generateDeterministicShortHash(i),
+                    message: message,
+                    fullMessage: message + '\n\nThis commit includes several improvements and bug fixes.\n\n- Enhanced user experience\n- Improved performance\n- Fixed critical issues\n- Added new features',
+                    author: author.name,
+                    authorEmail: author.email,
+                    date: commitDate.toISOString(),
+                    parents: i > 0 ? [commits[i-1].hash] : [],
+                    branch: branch,
+                    branchLevel: branchLevel,
+                    isMerge: message.toLowerCase().includes('merge'),
+                    isCheckout: message.toLowerCase().includes('checkout') || message.toLowerCase().includes('switch'),
+                    fileChanges: fileChanges
+                };
+                
+                commits.push(commit);
+            }
+            
+            return commits;
+        }
+
+        // Generate mock branches with progressive structure
+        function generateMockBranches() {
+            return [
+                { name: 'main', commit: 'abc1234', isCurrent: true },
+                { name: 'develop', commit: 'def5678', isCurrent: false },
+                { name: 'feature/user-auth', commit: 'ghi9012', isCurrent: false },
+                { name: 'feature/user-auth/login', commit: 'jkl3456', isCurrent: false },
+                { name: 'feature/user-auth/oauth', commit: 'mno7890', isCurrent: false },
+                { name: 'feature/payment', commit: 'pqr1234', isCurrent: false },
+                { name: 'feature/payment/stripe', commit: 'stu5678', isCurrent: false },
+                { name: 'feature/payment/paypal', commit: 'vwx9012', isCurrent: false },
+                { name: 'feature/dashboard', commit: 'yza3456', isCurrent: false },
+                { name: 'feature/dashboard/analytics', commit: 'bcd7890', isCurrent: false },
+                { name: 'feature/dashboard/reports', commit: 'efg1234', isCurrent: false },
+                { name: 'bugfix/login-issue', commit: 'hij5678', isCurrent: false },
+                { name: 'bugfix/login-issue/validation', commit: 'klm9012', isCurrent: false },
+                { name: 'hotfix/security-patch', commit: 'nop3456', isCurrent: false },
+                { name: 'hotfix/security-patch/auth', commit: 'qrs7890', isCurrent: false }
+            ];
+        }
+
+        // Generate mock authors
+        function generateMockAuthors() {
+            return [
+                { name: 'John Doe', email: 'john.doe@company.com', commitCount: 15 },
+                { name: 'Jane Smith', email: 'jane.smith@company.com', commitCount: 12 },
+                { name: 'Mike Johnson', email: 'mike.johnson@company.com', commitCount: 8 },
+                { name: 'Sarah Wilson', email: 'sarah.wilson@company.com', commitCount: 10 },
+                { name: 'Alex Brown', email: 'alex.brown@company.com', commitCount: 5 }
+            ];
+        }
+
+        // Generate deterministic file changes
+        function generateFileChanges(seed = 12345) {
+            const fileTypes = [
+                { name: 'src/components/UserAuth.js', type: 'modified', icon: '📝' },
+                { name: 'src/utils/validation.js', type: 'added', icon: '➕' },
+                { name: 'src/styles/auth.css', type: 'modified', icon: '📝' },
+                { name: 'src/api/login.js', type: 'deleted', icon: '❌' },
+                { name: 'src/components/LoginForm.jsx', type: 'added', icon: '➕' },
+                { name: 'src/utils/helpers.js', type: 'modified', icon: '📝' },
+                { name: 'src/config/database.js', type: 'added', icon: '➕' },
+                { name: 'src/tests/auth.test.js', type: 'added', icon: '➕' },
+                { name: 'src/old/legacy.js', type: 'deleted', icon: '❌' },
+                { name: 'src/components/Dashboard.js', type: 'modified', icon: '📝' }
+            ];
+            
+            const changes = [];
+            const numChanges = Math.floor(seededRandom(seed) * 5) + 1; // 1-5 changes
+            
+            for (let i = 0; i < numChanges; i++) {
+                const fileIndex = Math.floor(seededRandom(seed + i) * fileTypes.length);
+                const file = fileTypes[fileIndex];
+                changes.push({
+                    ...file,
+                    linesAdded: Math.floor(seededRandom(seed + i + 100) * 50) + 1,
+                    linesDeleted: Math.floor(seededRandom(seed + i + 200) * 20)
+                });
+            }
+            
+            return changes;
+        }
+
+        // Generate deterministic hash
+        function generateDeterministicHash(index) {
+            const chars = 'abcdef0123456789';
+            let hash = '';
+            let seed = index * 12345;
+            
+            for (let i = 0; i < 40; i++) {
+                seed = (seed * 9301 + 49297) % 233280;
+                const rand = seed / 233280;
+                hash += chars[Math.floor(rand * chars.length)];
+            }
+            return hash;
+        }
+
+        // Generate deterministic short hash
+        function generateDeterministicShortHash(index) {
+            const chars = 'abcdef0123456789';
+            let hash = '';
+            let seed = index * 54321;
+            
+            for (let i = 0; i < 7; i++) {
+                seed = (seed * 9301 + 49297) % 233280;
+                const rand = seed / 233280;
+                hash += chars[Math.floor(rand * chars.length)];
+            }
+            return hash;
+        }
+
+        
+        function updateFilters() {
+            console.log('=== updateFilters called ===');
+            
+            const maxCommitsValue = document.getElementById('maxCommits').value;
+            const maxBranchesValue = document.getElementById('maxBranches').value;
+            const showMergesValue = document.getElementById('showMerges').value;
+            const branchValue = document.getElementById('branchFilter').value;
+            const authorValue = document.getElementById('authorFilter').value;
+            
+            console.log('Filter values:', {
+                maxCommits: maxCommitsValue,
+                maxBranches: maxBranchesValue,
+                showMerges: showMergesValue,
+                branch: branchValue,
+                author: authorValue
+            });
+            
+            currentFilters.maxCommits = parseInt(maxCommitsValue) || 100;
+            currentFilters.maxBranches = parseInt(maxBranchesValue) || 10;
+            currentFilters.showMerges = showMergesValue === 'true';
+            currentFilters.branch = branchValue || null;
+            currentFilters.author = authorValue || null;
+            
+            console.log('Updated currentFilters:', currentFilters);
+            
+            // Request real data from extension with updated filters
+            console.log('Sending loadGitData message with filters:', currentFilters);
+            vscode.postMessage({ command: 'loadGitData', filters: currentFilters });
+        }
+
+        // Reload webview
+        function reloadWebview() {
+            console.log('Reloading webview...');
+            
+            // Clear existing data
+            originalMockData = null;
+            currentGitData = null;
+            
+            // Reset filters to defaults
+            currentFilters = {
+                maxCommits: 100,
+                maxBranches: 10,
+                maxAuthors: 20,
+                showMerges: true,
+                showTags: true,
+                showStashes: false,
+                dateRange: null,
+                author: null,
+                branch: null,
+                search: null
+            };
+            
+            // Reset UI controls
+            document.getElementById('maxCommits').value = '100';
+            document.getElementById('maxBranches').value = '10';
+            document.getElementById('showMerges').value = 'true';
+            document.getElementById('branchFilter').value = '';
+            document.getElementById('authorFilter').value = '';
+            
+            // Show loading status
+            updateStatus('Reloading...');
+            
+            // Request real data from extension
+            vscode.postMessage({ command: 'loadGitData', filters: currentFilters });
+        }
+
+        // Handle messages from extension
+        window.addEventListener('message', event => {
+            const message = event.data;
+            console.log('Received message:', message.command);
+            console.log('Message data:', message);
+            
+            switch (message.command) {
+                case 'updateStatus':
+                    updateStatus(message.status);
+                    break;
+                case 'updateGitData':
+                    console.log('Processing updateGitData message...');
+                    updateGitData(message);
+                    break;
+                case 'updateFilters':
+                    updateFilterOptions(message);
+                    break;
+                case 'fileChangesResponse':
+                    console.log('Webview: Received fileChangesResponse for commit:', message.hash);
+                    console.log('Webview: File changes received:', message.changes);
+                    console.log('Webview: Number of changes:', message.changes ? message.changes.length : 0);
+                    
+                    // Update the commit with file changes
+                    if (currentGitData && currentGitData.commits) {
+                        const commit = currentGitData.commits.find(c => c.hash === message.hash);
+                        if (commit) {
+                            commit.fileChanges = message.changes;
+                            console.log('Webview: Updated commit', commit.hash, 'with', commit.fileChanges.length, 'file changes');
+                            
+                            // Re-render tooltip if it's currently open for this commit
+                            const existingTooltip = document.querySelector('.commit-tooltip');
+                            if (existingTooltip) {
+                                console.log('Webview: Re-rendering tooltip with file changes');
+                                // Update the existing tooltip content instead of creating a new one
+                                const fileChangesHtml = buildFileChangesHtml(commit.fileChanges);
+                                existingTooltip.innerHTML = 
+                                    '<div class="tooltip-header">' + commit.shortHash + '</div>' +
+                                    '<div class="tooltip-branch">' + commit.branch + '</div>' +
+                                    '<div class="tooltip-message">' + (commit.fullMessage || commit.message) + '</div>' +
+                                    '<div class="tooltip-author">' + commit.author + ' &lt;' + commit.authorEmail + '&gt;</div>' +
+                                    '<div class="tooltip-date">' + new Date(commit.date).toLocaleString() + '</div>' +
+                                    fileChangesHtml;
+                            }
+                        } else {
+                            console.log('Webview: Could not find commit', message.hash, 'in current data');
+                        }
+                    } else {
+                        console.log('Webview: No current git data available');
+                    }
+                    break;
+            }
+        });
+
+        // Update status display
+        function updateStatus(status) {
+            document.getElementById('status').textContent = status;
+            console.log('Status updated:', status);
+        }
+
+        // Update git data and render graph
+        function updateGitData(data) {
+            console.log('Updating git data:', data);
+            console.log('Data structure:', {
+                commits: data.commits ? data.commits.length : 'undefined',
+                branches: data.branches ? data.branches.length : 'undefined',
+                authors: data.authors ? data.authors.length : 'undefined',
+                status: data.status
+            });
+            console.log('Branches array:', data.branches);
+            console.log('Authors array:', data.authors);
+            currentGitData = data;
+            
+            // Update info panel
+            const commitCount = data.commits ? data.commits.length : 0;
+            const branchCount = data.branches ? data.branches.length : 0;
+            const authorCount = data.authors ? data.authors.length : 0;
+            
+            console.log('Updating info panel:', { commitCount, branchCount, authorCount });
+            
+            document.getElementById('commitCount').textContent = commitCount;
+            document.getElementById('branchCount').textContent = branchCount;
+            document.getElementById('authorCount').textContent = authorCount;
+            
+            // Update status
+            updateStatus(data.status || 'Ready');
+            
+            // Update filter options
+            updateFilterOptions(data);
+            
+            // Render the graph
+            if (data.commits && data.commits.length > 0) {
+                renderGitGraph(data);
+            } else {
+                showNoData();
+            }
+        }
+
+        // Update filter dropdown options
+        function updateFilterOptions(data) {
+            console.log('Webview: updateFilterOptions called with data:', data);
+            console.log('Webview: data.branches:', data.branches);
+            console.log('Webview: data.branches length:', data.branches ? data.branches.length : 'undefined');
+            
+            // Update branch filter
+            const branchSelect = document.getElementById('branchFilter');
+            branchSelect.innerHTML = '<option value="">All Branches</option>';
+            if (data.branches) {
+                console.log('Webview: Processing', data.branches.length, 'branches for filter');
+                data.branches.forEach(branch => {
+                    console.log('Webview: Processing branch:', branch);
+                    const option = document.createElement('option');
+                    option.value = branch.name;
+                    option.textContent = branch.name;
+                    if (branch.isCurrent) {
+                        option.textContent += ' (current)';
+                    }
+                    if (branch.isRemote) {
+                        option.textContent += ' (remote)';
+                    }
+                    branchSelect.appendChild(option);
+                });
+            } else {
+                console.log('Webview: No branches data available for filter');
+            }
+            
+            // Update author filter
+            const authorSelect = document.getElementById('authorFilter');
+            authorSelect.innerHTML = '<option value="">All Authors</option>';
+            if (data.authors) {
+                data.authors.forEach(author => {
+                    const option = document.createElement('option');
+                    option.value = author.name;
+                    option.textContent = author.name;
+                    authorSelect.appendChild(option);
+                });
+            }
+        }
+
+        // Show no data message
+        function showNoData() {
+            const container = document.getElementById('graphContainer');
+            container.innerHTML = '<div class="error">No commits found in this repository</div>';
+        }
+
+        // Render the git graph
+        function renderGitGraph(gitData) {
+            console.log('=== renderGitGraph called ===');
+            console.log('Container exists:', !!document.getElementById('graphContainer'));
+            console.log('Git data exists:', !!gitData);
+            console.log('Commits exist:', !!gitData.commits);
+            console.log('Commits count:', gitData.commits ? gitData.commits.length : 0);
+            
+            const container = document.getElementById('graphContainer');
+            if (!container) {
+                console.error('ERROR: Container not found!');
+                return;
+            }
+            
+            if (!gitData || !gitData.commits) {
+                console.error('ERROR: No git data or commits!');
+                showNoData();
+                return;
+            }
+            
+            try {
+                console.log('Creating git tree...');
+                const gitTree = createGitTree(gitData.commits);
+                console.log('Git tree created with nodes:', gitTree.nodes.length);
+                
+                console.log('Calculating layout...');
+                const layout = calculateHorizontalLayout(gitTree);
+                console.log('Layout calculated:', layout.width, 'x', layout.height);
+                
+                console.log('Creating SVG...');
+                const svg = createGitTreeSVG(layout, gitTree);
+                console.log('SVG created');
+                
+                // Clear container and add SVG
+                container.innerHTML = '';
+                container.appendChild(svg);
+                
+                console.log('✅ Graph rendered successfully');
+                
+            } catch (error) {
+                console.error('❌ Error rendering graph:', error);
+                console.error('Error details:', error.message);
+                console.error('Error stack:', error.stack);
+                
+                // Show fallback visualization
+                createSimpleFallbackVisualization(gitData.commits, container);
+            }
+        }
+
+        // Create git tree structure
+        function createGitTree(commits) {
+            console.log('createGitTree called with', commits.length, 'commits');
+            
+            const nodes = commits.map(commit => ({
+                hash: commit.hash,
+                shortHash: commit.shortHash,
+                message: commit.message,
+                fullMessage: commit.fullMessage,
+                author: commit.author,
+                authorEmail: commit.authorEmail,
+                date: commit.date,
+                parents: commit.parents || [],
+                children: [],
+                branch: commit.branch || 'main',
+                isMerge: commit.parents && commit.parents.length > 1,
+                isCheckout: commit.message.includes('checkout') || commit.message.includes('switch'),
+                fileChanges: commit.fileChanges || [],
+                x: 0,
+                y: 0,
+                color: '#007ACC'
+            }));
+            
+            // Build parent-child relationships
+            const hashToNode = new Map();
+            nodes.forEach(node => hashToNode.set(node.hash, node));
+            
+            nodes.forEach(node => {
+                node.parents.forEach(parentHash => {
+                    const parent = hashToNode.get(parentHash);
+                    if (parent) {
+                        parent.children.push(node);
+                    }
+                });
+            });
+            
+            // Assign branches and colors
+            const branchColors = ['#007ACC', '#28A745', '#FFC107', '#DC3545', '#6F42C1', '#20C997', '#FD7E14', '#6C757D'];
+            const branchColorMap = new Map();
+            let colorIndex = 0;
+            
+            nodes.forEach(node => {
+                // Use the branch from the commit data (set by extension)
+                const branchName = node.branch || 'main';
+                
+                // Assign branch level for lane positioning
+                if (branchName === 'main') {
+                    node.branchLevel = 0;
+                } else if (branchName === 'develop') {
+                    node.branchLevel = 1;
+                } else if (branchName.includes('feature/') || branchName.includes('bugfix/')) {
+                    if (branchName.split('/').length === 2) {
+                        node.branchLevel = 2; // feature/user-auth
+                    } else if (branchName.split('/').length === 3) {
+                        node.branchLevel = 3; // feature/user-auth/login
+                    } else {
+                        node.branchLevel = 2;
+                    }
+                } else if (branchName.includes('hotfix/')) {
+                    if (branchName.split('/').length === 2) {
+                        node.branchLevel = 1; // hotfix/security-patch
+                    } else {
+                        node.branchLevel = 2; // hotfix/security-patch/auth
+                    }
+                } else {
+                    node.branchLevel = 1;
+                }
+                
+                if (!branchColorMap.has(branchName)) {
+                    branchColorMap.set(branchName, branchColors[colorIndex % branchColors.length]);
+                    colorIndex++;
+                }
+                
+                node.color = branchColorMap.get(branchName);
+            });
+            
+            console.log('Branch detection complete. Found branches:', Array.from(branchColorMap.keys()));
+            console.log('Branch details:', Array.from(branchColorMap.entries()));
+            
+            return {
+                nodes,
+                branches: Array.from(branchColorMap.keys()),
+                branchColors: branchColorMap
+            };
+        }
+
+        // Calculate horizontal layout
+        function calculateHorizontalLayout(gitTree) {
+            const { nodes, branches } = gitTree;
+            
+            // Sort nodes chronologically (oldest first)
+            const sortedNodes = [...nodes].sort((a, b) => new Date(a.date) - new Date(b.date));
+            
+            // Assign x positions based on chronological order
+            const xSpacing = 200;
+            sortedNodes.forEach((node, index) => {
+                node.x = index * xSpacing + 50;
+            });
+            
+            // Calculate y positions using branch lanes
+            const branchSpacing = 60;
+            const startY = 100;
+            const checkoutLaneOffset = 200;
+            
+            // Create branch lane mapping
+            const sortedBranches = [...new Set(branches)].sort((a, b) => {
+                if (a === 'main' || a === 'master') return -1;
+                if (b === 'main' || b === 'master') return 1;
+                return a.localeCompare(b);
+            });
+            
+            const branchLanes = new Map();
+            let nextLane = 0;
+            sortedBranches.forEach(branch => {
+                branchLanes.set(branch, nextLane++);
+            });
+            
+            console.log('Detected branches:', sortedBranches);
+            console.log('Branch count:', sortedBranches.length);
+            
+            // Track checkout branches
+            const checkoutBranches = new Set();
+            sortedNodes.forEach(node => {
+                if (node.isCheckout) {
+                    checkoutBranches.add(node.branch);
+                }
+            });
+            
+            // Assign y positions using branch levels
+            sortedNodes.forEach(node => {
+                if (node.isCheckout) {
+                    // Checkout commits go to bottom lane
+                    node.y = startY + checkoutLaneOffset;
+                } else {
+                    // Use branch level for lane positioning
+                    const branchLevel = node.branchLevel || 0;
+                    const laneOffset = branchLevel * branchSpacing;
+                    node.y = startY + laneOffset;
+                }
+            });
+            
+            // Calculate dimensions
+            const width = Math.max(...sortedNodes.map(n => n.x)) + 100;
+            const height = Math.max(...sortedNodes.map(n => n.y)) + 150; // Increased for author text
+            
+            return {
+                width,
+                height,
+                nodes: sortedNodes,
+                branches: sortedBranches,
+                branchPositions: branchLanes,
+                checkoutBranches: Array.from(checkoutBranches)
+            };
+        }
+
+        // Create SVG visualization
+        function createGitTreeSVG(layout, gitTree) {
+            const { width, height, nodes } = layout;
+            const { branchColors } = gitTree;
+            
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+            svg.classList.add('graph-svg');
+            
+            // Define arrowhead marker
+            const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+            const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+            marker.setAttribute('id', 'arrowhead');
+            marker.setAttribute('markerWidth', '10');
+            marker.setAttribute('markerHeight', '7');
+            marker.setAttribute('refX', '9');
+            marker.setAttribute('refY', '3.5');
+            marker.setAttribute('orient', 'auto');
+            
+            const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+            polygon.setAttribute('points', '0 0, 10 3.5, 0 7');
+            polygon.setAttribute('fill', 'var(--vscode-foreground)');
+            marker.appendChild(polygon);
+            defs.appendChild(marker);
+            svg.appendChild(defs);
+            
+            // Draw chronological progression lines
+            nodes.forEach((node, index) => {
+                if (index < nodes.length - 1) {
+                    const nextNode = nodes[index + 1];
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', node.x);
+                    line.setAttribute('y1', node.y);
+                    line.setAttribute('x2', nextNode.x);
+                    line.setAttribute('y2', nextNode.y);
+                    line.setAttribute('stroke', 'var(--vscode-panel-border)');
+                    line.setAttribute('stroke-width', '1');
+                    line.setAttribute('marker-end', 'url(#arrowhead)');
+                    svg.appendChild(line);
+                }
+            });
+            
+            // Draw parent-child relationships (for merge commits)
+            nodes.forEach(node => {
+                node.children.forEach(child => {
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', node.x);
+                    line.setAttribute('y1', node.y);
+                    line.setAttribute('x2', child.x);
+                    line.setAttribute('y2', child.y);
+                    line.setAttribute('stroke', node.color);
+                    line.setAttribute('stroke-width', '2');
+                    line.setAttribute('stroke-dasharray', '5,5');
+                    svg.appendChild(line);
+                });
+            });
+            
+            // Draw commit nodes
+            nodes.forEach(node => {
+                // Commit circle/diamond
+                let nodeElement;
+                if (node.isMerge) {
+                    nodeElement = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                    const points = node.x + ',' + (node.y - 8) + ' ' + (node.x + 8) + ',' + node.y + ' ' + node.x + ',' + (node.y + 8) + ' ' + (node.x - 8) + ',' + node.y;
+                    nodeElement.setAttribute('points', points);
+                } else {
+                    nodeElement = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    nodeElement.setAttribute('cx', node.x);
+                    nodeElement.setAttribute('cy', node.y);
+                    nodeElement.setAttribute('r', '8');
+                }
+                
+                nodeElement.setAttribute('fill', node.color);
+                nodeElement.setAttribute('stroke', node.isCheckout ? '#FFD700' : 'var(--vscode-panel-border)');
+                nodeElement.setAttribute('stroke-width', '2');
+                nodeElement.classList.add('commit-node');
+                
+                // Add click handler
+                nodeElement.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    console.log('Commit clicked:', node.shortHash);
+                });
+                
+                // Remove tooltip handlers from circle - only show on message click
+                
+                svg.appendChild(nodeElement);
+                
+                // Commit hash text
+                const hashText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                hashText.setAttribute('x', node.x);
+                hashText.setAttribute('y', node.y - 15);
+                hashText.setAttribute('text-anchor', 'middle');
+                hashText.setAttribute('class', 'commit-text');
+                hashText.textContent = node.shortHash;
+                svg.appendChild(hashText);
+                
+                 // Commit message text (clickable for detailed popup)
+                 const messageText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                 messageText.setAttribute('x', node.x);
+                 messageText.setAttribute('y', node.y + 25);
+                 messageText.setAttribute('text-anchor', 'middle');
+                 messageText.setAttribute('class', 'commit-text clickable-text');
+                 messageText.textContent = node.message.length > 20 ? node.message.substring(0, 20) + '...' : node.message;
+                 
+                 // Create invisible clickable area behind the text
+                 const messageClickArea = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                 const textLength = messageText.textContent.length;
+                 const rectWidth = Math.max(textLength * 6, 80); // Approximate text width
+                 messageClickArea.setAttribute('x', node.x - rectWidth/2);
+                 messageClickArea.setAttribute('y', node.y + 15);
+                 messageClickArea.setAttribute('width', rectWidth);
+                 messageClickArea.setAttribute('height', '15');
+                 messageClickArea.setAttribute('fill', 'transparent');
+                 messageClickArea.setAttribute('stroke', 'none');
+                 messageClickArea.style.cursor = 'pointer';
+                 
+                 // Add click event to the invisible rectangle
+                 messageClickArea.addEventListener('click', (e) => {
+                     e.stopPropagation();
+                     console.log('Commit message clicked:', node.shortHash);
+                     showCommitTooltip(node, e);
+                 });
+                 
+                 svg.appendChild(messageClickArea);
+                 svg.appendChild(messageText);
+                
+                // Branch label
+                const branchText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                branchText.setAttribute('x', node.x);
+                branchText.setAttribute('y', node.y + 40);
+                branchText.setAttribute('text-anchor', 'middle');
+                branchText.setAttribute('class', 'branch-label');
+                branchText.textContent = node.branch + (node.isCheckout ? ' (checkout)' : '');
+                branchText.setAttribute('fill', node.isCheckout ? '#FFD700' : 'var(--vscode-descriptionForeground)');
+                svg.appendChild(branchText);
+                
+                // Author text (clickable for author popup)
+                const authorText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                authorText.setAttribute('x', node.x);
+                authorText.setAttribute('y', node.y + 55);
+                authorText.setAttribute('text-anchor', 'middle');
+                authorText.setAttribute('class', 'commit-text clickable-text');
+                authorText.textContent = node.author;
+                
+                // Create invisible clickable area behind the author text
+                const authorClickArea = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                const authorTextLength = authorText.textContent.length;
+                const authorRectWidth = Math.max(authorTextLength * 6, 60); // Approximate text width
+                authorClickArea.setAttribute('x', node.x - authorRectWidth/2);
+                authorClickArea.setAttribute('y', node.y + 45);
+                authorClickArea.setAttribute('width', authorRectWidth);
+                authorClickArea.setAttribute('height', '15');
+                authorClickArea.setAttribute('fill', 'transparent');
+                authorClickArea.setAttribute('stroke', 'none');
+                authorClickArea.style.cursor = 'pointer';
+                
+                // Add click event to the invisible rectangle
+                authorClickArea.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    console.log('Author clicked:', node.author);
+                    const author = currentGitData.authors.find(a => a.name === node.author);
+                    if (author) {
+                        showAuthorTooltip(author, e);
+                    } else {
+                        console.log('Author not found in currentGitData:', currentGitData);
+                    }
+                });
+                
+                svg.appendChild(authorClickArea);
+                svg.appendChild(authorText);
+            });
+            
+            // Add mouse interactions
+            addMouseInteractions(svg);
+            
+            // Set initial zoom and pan to show latest commits
+            svg.style.transform = 'translate(-1200px, 0px) scale(2.0)';
+            
+            return svg;
+        }
+
+        // Add mouse interactions (zoom and pan)
+        function addMouseInteractions(svg) {
+            let isDragging = false;
+            let startX, startY;
+            let currentTranslateX = -1200; // Start translated further to show latest commits
+            let currentTranslateY = 0;
+            let currentScale = 2.0; // Start more zoomed in
+            
+            svg.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                startX = e.clientX - currentTranslateX;
+                startY = e.clientY - currentTranslateY;
+                svg.style.cursor = 'grabbing';
+            });
+            
+            svg.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    currentTranslateX = e.clientX - startX;
+                    currentTranslateY = e.clientY - startY;
+                    svg.style.transform = 'translate(' + currentTranslateX + 'px, ' + currentTranslateY + 'px) scale(' + currentScale + ')';
+                }
+            });
+            
+            svg.addEventListener('mouseup', () => {
+                isDragging = false;
+                svg.style.cursor = 'grab';
+            });
+            
+            svg.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                currentScale *= delta;
+                currentScale = Math.max(0.1, Math.min(3, currentScale));
+                svg.style.transform = 'translate(' + currentTranslateX + 'px, ' + currentTranslateY + 'px) scale(' + currentScale + ')';
+            });
+        }
+
+        // Show commit tooltip
+        function showCommitTooltip(commit, event) {
+            console.log('Webview: showCommitTooltip called for commit:', commit.hash);
+            console.log('Webview: Commit fileChanges:', commit.fileChanges);
+            console.log('Webview: Commit fileChanges length:', commit.fileChanges ? commit.fileChanges.length : 'undefined');
+            
+            // Hide any existing tooltip first
+            hideCommitTooltip();
+            
+            // Request file changes if not already loaded
+            if (!commit.fileChanges || commit.fileChanges.length === 0) {
+                console.log('Webview: Requesting file changes for commit:', commit.hash);
+                vscode.postMessage({ command: 'fileChangesRequest', hash: commit.hash });
+                
+                // Show tooltip without file changes first
+                showCommitTooltipContent(commit, event, '<div class="tooltip-files"><div class="tooltip-files-title">Loading file changes...</div></div>');
+                return;
+            }
+            
+            console.log('Webview: Showing tooltip with file changes for commit:', commit.hash);
+            console.log('Webview: File changes to display:', commit.fileChanges);
+            // Show tooltip with file changes
+            showCommitTooltipContent(commit, event, buildFileChangesHtml(commit.fileChanges));
+        }
+        
+        function buildFileChangesHtml(fileChanges) {
+            console.log('Webview: Building file changes HTML for', fileChanges ? fileChanges.length : 0, 'files');
+            console.log('Webview: File changes data:', fileChanges);
+            
+            if (!fileChanges || fileChanges.length === 0) {
+                console.log('Webview: No file changes to display');
+                return '<div class="tooltip-files"><div class="tooltip-files-title">No file changes found</div></div>';
+            }
+            
+            let fileChangesHtml = '<div class="tooltip-files">' +
+                '<div class="tooltip-files-title">File Changes (' + fileChanges.length + '):</div>';
+            
+            fileChanges.forEach((file, index) => {
+                console.log('Webview: Processing file', index, ':', file);
+                const typeClass = 'tooltip-file-' + file.type;
+                fileChangesHtml += '<div class="tooltip-file">' +
+                    '<span class="tooltip-file-icon">' + (file.icon || '📄') + '</span>' +
+                    '<span class="tooltip-file-name ' + typeClass + '">' + (file.name || 'Unknown file') + '</span>' +
+                    '<span class="tooltip-file-stats">+' + (file.linesAdded || 0) + ' -' + (file.linesDeleted || 0) + '</span>' +
+                    '</div>';
+            });
+            
+            fileChangesHtml += '</div>';
+            console.log('Webview: Generated file changes HTML:', fileChangesHtml);
+            return fileChangesHtml;
+        }
+        
+        function showCommitTooltipContent(commit, event, fileChangesHtml) {
+            const tooltip = document.createElement('div');
+            tooltip.className = 'commit-tooltip';
+            
+            tooltip.innerHTML = 
+                '<div class="tooltip-header">' + commit.shortHash + '</div>' +
+                '<div class="tooltip-branch">' + commit.branch + '</div>' +
+                '<div class="tooltip-message">' + (commit.fullMessage || commit.message) + '</div>' +
+                '<div class="tooltip-author">' + commit.author + ' &lt;' + commit.authorEmail + '&gt;</div>' +
+                '<div class="tooltip-date">' + new Date(commit.date).toLocaleString() + '</div>' +
+                fileChangesHtml;
+            
+            document.body.appendChild(tooltip);
+            
+            // Position tooltip
+            const rect = document.body.getBoundingClientRect();
+            const tooltipRect = tooltip.getBoundingClientRect();
+            
+            // Adjust position to keep tooltip in viewport
+            let left = event.clientX - rect.left + 10;
+            let top = event.clientY - rect.top - 10;
+            
+            // Check if tooltip goes off screen
+            if (left + tooltipRect.width > window.innerWidth) {
+                left = event.clientX - rect.left - tooltipRect.width - 10;
+            }
+            if (top + tooltipRect.height > window.innerHeight) {
+                top = event.clientY - rect.top - tooltipRect.height - 10;
+            }
+            
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
+            
+            // Add click outside to close
+            const closeTooltip = (e) => {
+                if (!tooltip.contains(e.target)) {
+                    hideCommitTooltip();
+                    document.removeEventListener('click', closeTooltip);
+                }
+            };
+            
+            setTimeout(() => {
+                document.addEventListener('click', closeTooltip);
+            }, 100);
+            
+            // Auto-remove after 10 seconds
+            setTimeout(() => {
+                if (tooltip.parentNode) {
+                    tooltip.parentNode.removeChild(tooltip);
+                }
+            }, 10000);
+        }
+
+        // Hide commit tooltip
+        function hideCommitTooltip() {
+            const tooltips = document.querySelectorAll('.commit-tooltip');
+            tooltips.forEach(tooltip => {
+                if (tooltip.parentNode) {
+                    tooltip.parentNode.removeChild(tooltip);
+                }
+            });
+        }
+
+        // Show author tooltip
+        function showAuthorTooltip(author, event) {
+            const tooltip = document.createElement('div');
+            tooltip.className = 'author-tooltip';
+            
+            tooltip.innerHTML = 
+                '<div class="author-tooltip-header">Author Details</div>' +
+                '<div class="author-tooltip-name">' + author.name + '</div>' +
+                '<div class="author-tooltip-email">' + author.email + '</div>' +
+                '<div class="author-tooltip-stats">Total commits: ' + author.commitCount + '</div>';
+            
+            document.body.appendChild(tooltip);
+            
+            // Position tooltip
+            const rect = document.body.getBoundingClientRect();
+            const tooltipRect = tooltip.getBoundingClientRect();
+            
+            // Adjust position to keep tooltip in viewport
+            let left = event.clientX - rect.left + 10;
+            let top = event.clientY - rect.top - 10;
+            
+            // Check if tooltip goes off screen
+            if (left + tooltipRect.width > window.innerWidth) {
+                left = event.clientX - rect.left - tooltipRect.width - 10;
+            }
+            if (top + tooltipRect.height > window.innerHeight) {
+                top = event.clientY - rect.top - tooltipRect.height - 10;
+            }
+            
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
+            
+            // Auto-remove after 4 seconds
+            setTimeout(() => {
+                if (tooltip.parentNode) {
+                    tooltip.parentNode.removeChild(tooltip);
+                }
+            }, 4000);
+        }
+
+        // Hide author tooltip
+        function hideAuthorTooltip() {
+            const tooltips = document.querySelectorAll('.author-tooltip');
+            tooltips.forEach(tooltip => {
+                if (tooltip.parentNode) {
+                    tooltip.parentNode.removeChild(tooltip);
+                }
+            });
+        }
+
+        // Create simple fallback visualization
+        function createSimpleFallbackVisualization(commits, container) {
+            console.log('Creating fallback visualization with', commits.length, 'commits');
+            
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            svg.setAttribute('viewBox', '0 0 800 400');
+            
+            const xSpacing = Math.max(200, 800 / commits.length);
+            
+            commits.forEach((commit, index) => {
+                const x = index * xSpacing + 50;
+                const y = 200;
+                
+                // Draw circle
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', x);
+                circle.setAttribute('cy', y);
+                circle.setAttribute('r', '8');
+                circle.setAttribute('fill', '#007ACC');
+                circle.setAttribute('stroke', 'var(--vscode-panel-border)');
+                circle.setAttribute('stroke-width', '2');
+                svg.appendChild(circle);
+                
+                // Draw line to next commit
+                if (index < commits.length - 1) {
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', x);
+                    line.setAttribute('y1', y);
+                    line.setAttribute('x2', x + xSpacing);
+                    line.setAttribute('y2', y);
+                    line.setAttribute('stroke', 'var(--vscode-panel-border)');
+                    line.setAttribute('stroke-width', '2');
+                    svg.appendChild(line);
+                }
+                
+                // Add text
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x);
+                text.setAttribute('y', y - 20);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('class', 'commit-text');
+                text.textContent = commit.shortHash;
+                svg.appendChild(text);
+            });
+            
+            container.appendChild(svg);
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initializeUI);
+    </script>
+</body>
+</html>
