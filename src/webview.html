@@ -1499,11 +1499,11 @@
                     zoomLevelElement.textContent = Math.round(currentScale * 100) + '%';
                 }
                 
-                // Update button states
+                // Update button states - no limits
                 const zoomInBtn = document.getElementById('zoomIn');
                 const zoomOutBtn = document.getElementById('zoomOut');
-                if (zoomInBtn) zoomInBtn.disabled = currentScale >= 5;
-                if (zoomOutBtn) zoomOutBtn.disabled = currentScale <= 0.1;
+                if (zoomInBtn) zoomInBtn.disabled = false;
+                if (zoomOutBtn) zoomOutBtn.disabled = false;
             }
             
             // Apply transform
@@ -1512,14 +1512,14 @@
                 updateZoomDisplay();
             }
             
-            // Zoom functions
+            // Zoom functions - no limits
             function zoomIn() {
-                currentScale = Math.min(5, currentScale * 1.2);
+                currentScale = currentScale * 1.2;
                 applyTransform();
             }
             
             function zoomOut() {
-                currentScale = Math.max(0.1, currentScale * 0.8);
+                currentScale = currentScale * 0.8;
                 applyTransform();
             }
             
@@ -1587,7 +1587,7 @@
                 e.preventDefault();
                 const delta = e.deltaY > 0 ? 0.9 : 1.1;
                 currentScale *= delta;
-                currentScale = Math.max(0.1, Math.min(5, currentScale));
+                // No minimum or maximum limits
                 applyTransform();
             });
             
