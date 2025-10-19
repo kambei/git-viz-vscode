@@ -450,6 +450,17 @@ class GitService {
                                     };
                                     console.log('GitService: Found file in diff:', currentFile.name, 'type:', currentFile.type, 'icon:', currentFile.icon, 'lines:', currentFile.linesAdded, '+', currentFile.linesDeleted, '-');
                                 }
+                            } else if (line.startsWith('deleted file mode')) {
+                                // Handle deleted files that don't show /dev/null in diff header
+                                if (currentFile) {
+                                    currentFile.type = 'deleted';
+                                    currentFile.icon = '❌';
+                                    // For deleted files, we need to ensure we have at least 1 deleted line
+                                    if (currentFile.linesDeleted === 0) {
+                                        currentFile.linesDeleted = 1;
+                                    }
+                                    console.log('GitService: Detected deleted file:', currentFile.name, 'type:', currentFile.type, 'icon:', currentFile.icon, 'lines:', currentFile.linesAdded, '+', currentFile.linesDeleted, '-');
+                                }
                             } else if (line.startsWith('+++')) {
                                 // Extract file name from +++ line
                                 const fileName = line.replace('+++ b/', '').replace('+++ a/', '');
@@ -488,6 +499,20 @@ class GitService {
                                     
                                     fileChanges.push({ ...currentFile });
                                     console.log('GitService: Added file change:', currentFile.name, 'type:', currentFile.type, 'lines:', currentFile.linesAdded, '+', currentFile.linesDeleted, '-');
+                                    currentFile = null;
+                                }
+                            } else if (line.startsWith('Binary files') && currentFile) {
+                                // For binary files (including deleted ones), commit immediately
+                                if (!fileChanges.find(f => f.name === currentFile.name)) {
+                                    // Ensure we have at least 1 line for added/deleted files
+                                    if (currentFile.type === 'added' && currentFile.linesAdded === 0) {
+                                        currentFile.linesAdded = 1;
+                                    } else if (currentFile.type === 'deleted' && currentFile.linesDeleted === 0) {
+                                        currentFile.linesDeleted = 1;
+                                    }
+                                    
+                                    fileChanges.push({ ...currentFile });
+                                    console.log('GitService: Added binary file change:', currentFile.name, 'type:', currentFile.type, 'lines:', currentFile.linesAdded, '+', currentFile.linesDeleted, '-');
                                     currentFile = null;
                                 }
                             }
