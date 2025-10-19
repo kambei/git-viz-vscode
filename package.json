@@ -2,7 +2,7 @@
   "name": "git-viz-vscode",
   "displayName": "Git Viz",
   "description": "Horizontal Git repository visualization for VS Code and Cursor",
-  "version": "2.4.2",
+  "version": "3.5.0",
   "publisher": "kambei",
   "icon": "media/main-icon.png",
   "engines": {
@@ -12,13 +12,12 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:git-viz.test",
     "onCommand:git-viz.open",
     "onCommand:git-viz.refresh",
     "onCommand:git-viz.zoomIn",
     "onCommand:git-viz.zoomOut"
   ],
-  "main": "./out/extension.js",
+  "main": "./src/extension.js",
   "contributes": {
     "iconThemes": [
       {
@@ -28,11 +27,6 @@
       }
     ],
     "commands": [
-      {
-        "command": "git-viz.test",
-        "title": "Test Git Viz",
-        "category": "Git Viz"
-      },
       {
         "command": "git-viz.open",
         "title": "Open Git Viz",
@@ -81,26 +75,6 @@
         }
       ]
     }
-  },
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
-    "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
-  },
-  "devDependencies": {
-    "@types/node": "16.x",
-    "@types/react": "^18.0.0",
-    "@types/react-dom": "^18.0.0",
-    "@types/vscode": "^1.40.0",
-    "@typescript-eslint/eslint-plugin": "^5.45.0",
-    "@typescript-eslint/parser": "^5.45.0",
-    "eslint": "^8.28.0",
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "typescript": "^4.9.4"
   },
   "repository": {
     "type": "git",

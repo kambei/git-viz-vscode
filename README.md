@@ -21,9 +21,10 @@ A Visual Studio Code and Cursor extension for visualizing git repositories with 
 ### From Source (Development)
 
 1. Clone this repository
-2. Run `npm install` to install dependencies
-3. Press `F5` to open a new Extension Development Host window
-4. The extension will be loaded in the new window
+2. Press `F5` to open a new Extension Development Host window
+3. The extension will be loaded in the new window
+
+**Note**: This extension no longer requires Node.js as a prerequisite. It uses VS Code's built-in Git API instead of executing git commands directly.
 
 ## Usage
 
@@ -37,33 +38,21 @@ A Visual Studio Code and Cursor extension for visualizing git repositories with 
 
 ### Prerequisites
 
-- Node.js (v16 or higher)
-- npm or yarn
 - Visual Studio Code or Cursor
+- Git repository (the extension uses VS Code's built-in Git API)
 
 ### Setup
 
-```bash
-# Install dependencies
-npm install
+This extension is now written in pure JavaScript and uses VS Code's built-in Git API, so no build process or Node.js dependencies are required.
 
-# Compile TypeScript
-npm run compile
-
-# Watch for changes
-npm run watch
-
-# Run linting
-npm run lint
-```
+1. Clone this repository
+2. Press `F5` to open a new Extension Development Host window
+3. The extension will be loaded in the new window
 
 ### Building
 
 ```bash
-# Build the extension
-npm run compile
-
-# Package the extension
+# Package the extension (requires vsce)
 vsce package
 ```
 
@@ -97,4 +86,4 @@ If you encounter any issues or have feature requests, please open an issue on Gi
 
 If you find this application helpful, consider supporting me on Ko-fi!
 
-[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kambei)
+[Support me on Ko-fi](https://ko-fi.com/kambei)

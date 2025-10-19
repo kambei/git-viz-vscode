@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Git Visualization Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #1e1e1e;
+            color: #cccccc;
+        }
+        .test-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .test-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .test-info {
+            background-color: #2d2d30;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .test-button {
+            background-color: #007acc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .test-button:hover {
+            background-color: #005a9e;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <div class="test-header">
+            <h1>🎯 Git Visualization Webview Test</h1>
+            <p>Testing the separated webview with mock data and enhanced popups</p>
+        </div>
+        
+        <div class="test-info">
+            <h3>✅ Features Implemented:</h3>
+            <ul>
+                <li><strong>Mock Data:</strong> 50 realistic commits across 6 branches</li>
+                <li><strong>Enhanced Commit Popups:</strong> Full commit message + file changes with icons</li>
+                <li><strong>Author Popups:</strong> Author details with commit count</li>
+                <li><strong>File Changes:</strong> Added (➕), Modified (📝), Deleted (❌) with line counts</li>
+                <li><strong>Interactive Elements:</strong> Hover over commits and authors for detailed info</li>
+                <li><strong>Multiple Branches:</strong> main, develop, feature branches, bugfix, hotfix</li>
+            </ul>
+        </div>
+        
+        <div class="test-info">
+            <h3>🎮 How to Test:</h3>
+            <ol>
+                <li>Open the webview in VS Code (Ctrl+Shift+P → "Git Viz: Open")</li>
+                <li>Hover over commit circles to see detailed commit info</li>
+                <li>Hover over author names to see author details</li>
+                <li>Use mouse wheel to zoom in/out</li>
+                <li>Drag to pan around the graph</li>
+                <li>Try different filter settings</li>
+            </ol>
+        </div>
+        
+        <div style="text-align: center;">
+            <button class="test-button" onclick="window.open('src/webview.html', '_blank')">
+                🚀 Open Webview in New Tab
+            </button>
+            <button class="test-button" onclick="alert('Mock data includes:\n• 50 commits across 6 branches\n• 5 different authors\n• Realistic file changes with icons\n• Full commit messages\n• Author statistics')">
+                📊 View Mock Data Info
+            </button>
+        </div>
+        
+        <div class="test-info">
+            <h3>🔍 Expected Behavior:</h3>
+            <ul>
+                <li><strong>Commit Hover:</strong> Shows hash, branch, full message, author, date, and file changes</li>
+                <li><strong>Author Hover:</strong> Shows name, email, and total commit count</li>
+                <li><strong>File Icons:</strong> ➕ Added, 📝 Modified, ❌ Deleted with line counts</li>
+                <li><strong>Branch Colors:</strong> Different colors for each branch</li>
+                <li><strong>Checkout Commits:</strong> Gold border for checkout operations</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
