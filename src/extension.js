@@ -60,14 +60,15 @@ class GitService {
             
             const maxCommits = filters.maxCommits || 50;
             
-            // Get commits using git log with custom format
-            const logFormat = '%H|%h|%s|%an|%ae|%ad|%P';
-            const logCommand = `git log --max-count=${maxCommits} --pretty=format:"${logFormat}" --date=iso-strict`;
+            // Get commits using git log with custom format including branch information
+            const logFormat = '%H|%h|%s|%an|%ae|%ad|%P|%D';
+            const logCommand = `git log --max-count=${maxCommits} --pretty=format:"${logFormat}" --date=iso-strict --all --decorate=full`;
             
             const logOutput = await this.executeGitCommand(logCommand);
             const commitLines = logOutput.trim().split('\n').filter(line => line.trim());
             
             console.log('GitService: Got', commitLines.length, 'commits');
+            console.log('GitService: Sample log output:', commitLines.slice(0, 3));
             
             // Get branch information for better branch assignment
             const branchMap = await this.getBranchMap();
@@ -75,7 +76,7 @@ class GitService {
             
             // Transform commits to our format
             const transformedCommits = commitLines.map((line, index) => {
-                const [hash, shortHash, message, authorName, authorEmail, authorDate, parentsStr] = line.split('|');
+                const [hash, shortHash, message, authorName, authorEmail, authorDate, parentsStr, refNames] = line.split('|');
                 const parents = parentsStr ? parentsStr.split(' ').filter(p => p.trim()) : [];
                 
                 // Determine branch for this commit
@@ -90,59 +91,98 @@ class GitService {
                     }
                 }
                 
-                // If not a HEAD commit, try to determine branch from context
-                if (branch === 'main') {
-                    // Look at recent commits to determine likely branch
-                    const recentLines = commitLines.slice(Math.max(0, index - 3), index + 3);
-                    const branchContext = new Map();
+                // If not a HEAD commit, try to determine branch from ref names or git log decoration
+                if (branch === 'main' && refNames) {
+                    // Parse ref names to find branch information
+                    const refs = refNames.split(',').map(ref => ref.trim()).filter(ref => ref);
+                    console.log('GitService: Commit', shortHash, 'ref names:', refs);
                     
-                    recentLines.forEach(recentLine => {
-                        const [, , recentMessage] = recentLine.split('|');
-                        if (recentMessage) {
-                            const msg = recentMessage.toLowerCase();
-                            
-                            // Look for branch patterns in commit messages
-                            if (msg.includes('feature/')) {
-                                const featureMatch = msg.match(/feature\/([^\s]+)/i);
-                                if (featureMatch) {
-                                    const featureBranch = 'feature/' + featureMatch[1];
-                                    branchContext.set(featureBranch, (branchContext.get(featureBranch) || 0) + 1);
-                                }
-                            }
-                            if (msg.includes('bugfix/')) {
-                                const bugfixMatch = msg.match(/bugfix\/([^\s]+)/i);
-                                if (bugfixMatch) {
-                                    const bugfixBranch = 'bugfix/' + bugfixMatch[1];
-                                    branchContext.set(bugfixBranch, (branchContext.get(bugfixBranch) || 0) + 1);
-                                }
-                            }
-                            if (msg.includes('develop')) {
-                                branchContext.set('develop', (branchContext.get('develop') || 0) + 1);
-                            }
-                            if (msg.includes('hotfix')) {
-                                branchContext.set('hotfix', (branchContext.get('hotfix') || 0) + 1);
+                    // Look for branch references with priority order
+                    let foundBranch = null;
+                    
+                    // First priority: local branch references
+                    for (const ref of refs) {
+                        if (ref.includes('refs/heads/')) {
+                            const branchName = ref.replace('refs/heads/', '');
+                            if (branchName !== 'HEAD') {
+                                foundBranch = branchName;
+                                break;
                             }
                         }
-                    });
-                    
-                    // Use the most mentioned branch in recent context
-                    if (branchContext.size > 0) {
-                        let maxCount = 0;
-                        let mostLikelyBranch = 'main';
-                        for (const [branchName, count] of branchContext) {
-                            if (count > maxCount) {
-                                maxCount = count;
-                                mostLikelyBranch = branchName;
-                            }
-                        }
-                        branch = mostLikelyBranch;
                     }
+                    
+                    // Second priority: remote branch references
+                    if (!foundBranch) {
+                        for (const ref of refs) {
+                            if (ref.includes('origin/')) {
+                                const branchName = ref.replace('origin/', '');
+                                if (branchName !== 'HEAD') {
+                                    foundBranch = branchName;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Third priority: direct branch names
+                    if (!foundBranch) {
+                        for (const ref of refs) {
+                            if (!ref.includes('HEAD') && !ref.includes('tag:') && !ref.includes('refs/')) {
+                                foundBranch = ref;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (foundBranch) {
+                        branch = foundBranch;
+                        console.log('GitService: Assigned commit', shortHash, 'to branch', branch, 'from ref names');
+                    }
+                }
+                
+                // If still on main, try to determine branch from commit message patterns and context
+                if (branch === 'main') {
+                    const commitMessage = message.toLowerCase();
+                    
+                    // Look for branch patterns in commit messages
+                    if (commitMessage.includes('feature/')) {
+                        const featureMatch = commitMessage.match(/feature\/([^\s]+)/i);
+                        if (featureMatch) {
+                            branch = 'feature/' + featureMatch[1];
+                        }
+                    } else if (commitMessage.includes('bugfix/')) {
+                        const bugfixMatch = commitMessage.match(/bugfix\/([^\s]+)/i);
+                        if (bugfixMatch) {
+                            branch = 'bugfix/' + bugfixMatch[1];
+                        }
+                    } else if (commitMessage.includes('develop') || commitMessage.includes('dev')) {
+                        branch = 'dev';
+                    } else if (commitMessage.includes('test') || 
+                               (commitMessage.includes('draft') && !commitMessage.includes('working')) ||
+                               (commitMessage.includes('workin') && !commitMessage.includes('version'))) {
+                        // Only assign to test if the message clearly indicates test activity
+                        // Avoid assigning generic messages like "first commit", "working version" to test
+                        if (!commitMessage.includes('first commit') && 
+                            !commitMessage.includes('working version') &&
+                            !commitMessage.includes('initial') &&
+                            !commitMessage.includes('setup')) {
+                            branch = 'test';
+                        }
+                    } else if (commitMessage.includes('hotfix')) {
+                        const hotfixMatch = commitMessage.match(/hotfix\/([^\s]+)/i);
+                        if (hotfixMatch) {
+                            branch = 'hotfix/' + hotfixMatch[1];
+                        } else {
+                            branch = 'hotfix';
+                        }
+                    }
+                    
                 }
                 
                 // Assign branch level based on branch name structure
                 if (branch === 'main' || branch === 'master') {
                     branchLevel = 0;
-                } else if (branch === 'develop') {
+                } else if (branch === 'develop' || branch === 'dev') {
                     branchLevel = 1;
                 } else if (branch.includes('hotfix/')) {
                     branchLevel = 1;
@@ -170,6 +210,20 @@ class GitService {
             });
 
             console.log('GitService: Transformed', transformedCommits.length, 'commits');
+            
+            // Log branch distribution for debugging
+            const branchDistribution = new Map();
+            transformedCommits.forEach(commit => {
+                const count = branchDistribution.get(commit.branch) || 0;
+                branchDistribution.set(commit.branch, count + 1);
+            });
+            console.log('GitService: Branch distribution:', Array.from(branchDistribution.entries()));
+            
+            // Log sample commits with their branch assignments
+            console.log('GitService: Sample commits with branches:');
+            transformedCommits.slice(0, 5).forEach(commit => {
+                console.log(`  ${commit.shortHash}: ${commit.message} -> ${commit.branch} (level ${commit.branchLevel})`);
+            });
             
             // Apply filters
             let filteredCommits = transformedCommits;
@@ -462,7 +516,10 @@ class GitService {
                message.includes('merged pr') ||
                message.includes('merged mr') ||
                message.includes('rebase') ||
-               message.includes('cherry-pick');
+               message.includes('cherry-pick') ||
+               message.includes('test') ||
+               message.includes('draft') ||
+               message.includes('workin');
     }
 }
 

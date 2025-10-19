@@ -46,6 +46,41 @@
             flex-wrap: wrap;
         }
 
+        .zoom-controls {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+            margin-left: auto;
+        }
+
+        .zoom-btn {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .zoom-btn:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+
+        .zoom-btn:disabled {
+            background-color: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            cursor: not-allowed;
+        }
+
+        .zoom-level {
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+            min-width: 60px;
+            text-align: center;
+        }
+
         .control-group {
             display: flex;
             flex-direction: column;
@@ -348,6 +383,14 @@
              <select id="authorFilter">
                  <option value="">All Authors</option>
              </select>
+         </div>
+         
+         <div class="zoom-controls">
+             <button class="zoom-btn" id="zoomOut">-</button>
+             <span class="zoom-level" id="zoomLevel">250%</span>
+             <button class="zoom-btn" id="zoomIn">+</button>
+             <button class="zoom-btn" id="zoomFit">Fit</button>
+             <button class="zoom-btn" id="zoomReset">Reset</button>
          </div>
          <div class="control-group">
              <button id="reloadButton" class="btn">🔄 Reload</button>
@@ -967,9 +1010,10 @@
             // Update filter options
             updateFilterOptions(data);
             
-            // Render the graph
+            // Apply filters and render the graph
             if (data.commits && data.commits.length > 0) {
-                renderGitGraph(data);
+                const filteredData = applyFiltersToData(data);
+                renderGitGraph(filteredData);
             } else {
                 showNoData();
             }
@@ -1102,7 +1146,14 @@
                 node.parents.forEach(parentHash => {
                     const parent = hashToNode.get(parentHash);
                     if (parent) {
-                        parent.children.push(node);
+                        // Only add relationship if parent is older than child (chronological order)
+                        const parentDate = new Date(parent.date);
+                        const childDate = new Date(node.date);
+                        
+                        // Parent should be older than child (allow same time for fast merges)
+                        if (parentDate.getTime() <= childDate.getTime()) {
+                            parent.children.push(node);
+                        }
                     }
                 });
             });
@@ -1161,7 +1212,7 @@
         function calculateHorizontalLayout(gitTree) {
             const { nodes, branches } = gitTree;
             
-            // Sort nodes chronologically (oldest first)
+            // Sort nodes chronologically (oldest first) for positioning
             const sortedNodes = [...nodes].sort((a, b) => new Date(a.date) - new Date(b.date));
             
             // Assign x positions based on chronological order
@@ -1171,9 +1222,8 @@
             });
             
             // Calculate y positions using branch lanes
-            const branchSpacing = 60;
+            const branchSpacing = 80;
             const startY = 100;
-            const checkoutLaneOffset = 200;
             
             // Create branch lane mapping
             const sortedBranches = [...new Set(branches)].sort((a, b) => {
@@ -1190,31 +1240,19 @@
             
             console.log('Detected branches:', sortedBranches);
             console.log('Branch count:', sortedBranches.length);
+            console.log('Branch lanes mapping:', Array.from(branchLanes.entries()));
             
-            // Track checkout branches
-            const checkoutBranches = new Set();
+            // Assign y positions - each branch gets its own horizontal lane
             sortedNodes.forEach(node => {
-                if (node.isCheckout) {
-                    checkoutBranches.add(node.branch);
-                }
-            });
-            
-            // Assign y positions using branch levels
-            sortedNodes.forEach(node => {
-                if (node.isCheckout) {
-                    // Checkout commits go to bottom lane
-                    node.y = startY + checkoutLaneOffset;
-                } else {
-                    // Use branch level for lane positioning
-                    const branchLevel = node.branchLevel || 0;
-                    const laneOffset = branchLevel * branchSpacing;
-                    node.y = startY + laneOffset;
-                }
+                // All commits go to their respective branch lanes
+                const branchName = node.branch || 'main';
+                const laneIndex = branchLanes.get(branchName) || 0;
+                node.y = startY + (laneIndex * branchSpacing);
             });
             
             // Calculate dimensions
             const width = Math.max(...sortedNodes.map(n => n.x)) + 100;
-            const height = Math.max(...sortedNodes.map(n => n.y)) + 150; // Increased for author text
+            const height = Math.max(...sortedNodes.map(n => n.y)) + 150;
             
             return {
                 width,
@@ -1222,13 +1260,14 @@
                 nodes: sortedNodes,
                 branches: sortedBranches,
                 branchPositions: branchLanes,
-                checkoutBranches: Array.from(checkoutBranches)
+                branchSpacing,
+                startY
             };
         }
 
         // Create SVG visualization
         function createGitTreeSVG(layout, gitTree) {
-            const { width, height, nodes } = layout;
+            const { width, height, nodes, branches, branchSpacing, startY } = layout;
             const { branchColors } = gitTree;
             
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -1254,23 +1293,33 @@
             defs.appendChild(marker);
             svg.appendChild(defs);
             
-            // Draw chronological progression lines
-            nodes.forEach((node, index) => {
-                if (index < nodes.length - 1) {
-                    const nextNode = nodes[index + 1];
-                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                    line.setAttribute('x1', node.x);
-                    line.setAttribute('y1', node.y);
-                    line.setAttribute('x2', nextNode.x);
-                    line.setAttribute('y2', nextNode.y);
-                    line.setAttribute('stroke', 'var(--vscode-panel-border)');
-                    line.setAttribute('stroke-width', '1');
-                    line.setAttribute('marker-end', 'url(#arrowhead)');
-                    svg.appendChild(line);
-                }
+            // Draw horizontal branch lines
+            branches.forEach((branch, index) => {
+                const y = startY + (index * branchSpacing);
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', '50');
+                line.setAttribute('y1', y);
+                line.setAttribute('x2', width - 50);
+                line.setAttribute('y2', y);
+                line.setAttribute('stroke', branchColors.get(branch) || '#007ACC');
+                line.setAttribute('stroke-width', '3');
+                line.setAttribute('stroke-dasharray', '10,5');
+                svg.appendChild(line);
+                
+                // Add branch label
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', '20');
+                label.setAttribute('y', y + 5);
+                label.setAttribute('text-anchor', 'start');
+                label.setAttribute('class', 'branch-label');
+                label.setAttribute('fill', branchColors.get(branch) || '#007ACC');
+                label.setAttribute('font-weight', 'bold');
+                label.textContent = branch;
+                svg.appendChild(label);
             });
             
-            // Draw parent-child relationships (for merge commits)
+            
+            // Draw Git parent-child relationships
             nodes.forEach(node => {
                 node.children.forEach(child => {
                     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -1281,28 +1330,48 @@
                     line.setAttribute('stroke', node.color);
                     line.setAttribute('stroke-width', '2');
                     line.setAttribute('stroke-dasharray', '5,5');
+                    line.setAttribute('marker-end', 'url(#arrowhead)');
                     svg.appendChild(line);
                 });
             });
             
             // Draw commit nodes
             nodes.forEach(node => {
-                // Commit circle/diamond
+                // Determine node styling based on type
                 let nodeElement;
-                if (node.isMerge) {
+                let nodeColor = node.color;
+                let strokeColor = 'var(--vscode-panel-border)';
+                let strokeWidth = '2';
+                
+                if (node.isCheckout) {
+                    // Checkout commits: different styling within their branch lane
+                    nodeElement = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    nodeElement.setAttribute('cx', node.x);
+                    nodeElement.setAttribute('cy', node.y);
+                    nodeElement.setAttribute('r', '10');
+                    nodeColor = '#FFD700';
+                    strokeColor = '#FFA500';
+                    strokeWidth = '3';
+                } else if (node.isMerge) {
+                    // Merge commits: diamond shape
                     nodeElement = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
                     const points = node.x + ',' + (node.y - 8) + ' ' + (node.x + 8) + ',' + node.y + ' ' + node.x + ',' + (node.y + 8) + ' ' + (node.x - 8) + ',' + node.y;
                     nodeElement.setAttribute('points', points);
+                    // Merge commits use their branch color
+                    nodeColor = node.color;
                 } else {
+                    // Regular commits: circle
                     nodeElement = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
                     nodeElement.setAttribute('cx', node.x);
                     nodeElement.setAttribute('cy', node.y);
                     nodeElement.setAttribute('r', '8');
+                    // Regular commits use their branch color
+                    nodeColor = node.color;
                 }
                 
-                nodeElement.setAttribute('fill', node.color);
-                nodeElement.setAttribute('stroke', node.isCheckout ? '#FFD700' : 'var(--vscode-panel-border)');
-                nodeElement.setAttribute('stroke-width', '2');
+                nodeElement.setAttribute('fill', nodeColor);
+                nodeElement.setAttribute('stroke', strokeColor);
+                nodeElement.setAttribute('stroke-width', strokeWidth);
                 nodeElement.classList.add('commit-node', 'commit-circle');
                 
                 // Add click handler
@@ -1360,8 +1429,14 @@
                 branchText.setAttribute('y', node.y + 40);
                 branchText.setAttribute('text-anchor', 'middle');
                 branchText.setAttribute('class', 'branch-label');
-                branchText.textContent = node.branch + (node.isCheckout ? ' (checkout)' : '');
-                branchText.setAttribute('fill', node.isCheckout ? '#FFD700' : 'var(--vscode-descriptionForeground)');
+                
+                if (node.isCheckout) {
+                    branchText.textContent = 'Checkout: ' + node.branch;
+                    branchText.setAttribute('fill', '#FFD700');
+                } else {
+                    branchText.textContent = node.branch;
+                    branchText.setAttribute('fill', 'var(--vscode-descriptionForeground)');
+                }
                 svg.appendChild(branchText);
                 
                 // Author text (clickable for author popup)
@@ -1417,6 +1492,77 @@
             let currentTranslateY = 0;
             let currentScale = 2.5; // Start much more zoomed in
             
+            // Update zoom level display
+            function updateZoomDisplay() {
+                const zoomLevelElement = document.getElementById('zoomLevel');
+                if (zoomLevelElement) {
+                    zoomLevelElement.textContent = Math.round(currentScale * 100) + '%';
+                }
+                
+                // Update button states
+                const zoomInBtn = document.getElementById('zoomIn');
+                const zoomOutBtn = document.getElementById('zoomOut');
+                if (zoomInBtn) zoomInBtn.disabled = currentScale >= 5;
+                if (zoomOutBtn) zoomOutBtn.disabled = currentScale <= 0.1;
+            }
+            
+            // Apply transform
+            function applyTransform() {
+                svg.style.transform = 'translate(' + currentTranslateX + 'px, ' + currentTranslateY + 'px) scale(' + currentScale + ')';
+                updateZoomDisplay();
+            }
+            
+            // Zoom functions
+            function zoomIn() {
+                currentScale = Math.min(5, currentScale * 1.2);
+                applyTransform();
+            }
+            
+            function zoomOut() {
+                currentScale = Math.max(0.1, currentScale * 0.8);
+                applyTransform();
+            }
+            
+            function zoomFit() {
+                // Calculate fit scale based on container size
+                const container = svg.parentElement;
+                const containerWidth = container.clientWidth;
+                const containerHeight = container.clientHeight;
+                
+                // Estimate content size (this is approximate)
+                const contentWidth = 2000; // Approximate width of the graph
+                const contentHeight = 400; // Approximate height of the graph
+                
+                const scaleX = containerWidth / contentWidth;
+                const scaleY = containerHeight / contentHeight;
+                currentScale = Math.min(scaleX, scaleY, 3) * 0.8; // 0.8 for some padding
+                
+                // Center the content
+                currentTranslateX = (containerWidth - contentWidth * currentScale) / 2;
+                currentTranslateY = (containerHeight - contentHeight * currentScale) / 2;
+                
+                applyTransform();
+            }
+            
+            function zoomReset() {
+                currentScale = 2.5;
+                currentTranslateX = -1600;
+                currentTranslateY = 0;
+                applyTransform();
+            }
+            
+            // Add event listeners for zoom buttons
+            const zoomInBtn = document.getElementById('zoomIn');
+            const zoomOutBtn = document.getElementById('zoomOut');
+            const zoomFitBtn = document.getElementById('zoomFit');
+            const zoomResetBtn = document.getElementById('zoomReset');
+            
+            if (zoomInBtn) zoomInBtn.addEventListener('click', zoomIn);
+            if (zoomOutBtn) zoomOutBtn.addEventListener('click', zoomOut);
+            if (zoomFitBtn) zoomFitBtn.addEventListener('click', zoomFit);
+            if (zoomResetBtn) zoomResetBtn.addEventListener('click', zoomReset);
+            
+            // Mouse interactions
             svg.addEventListener('mousedown', (e) => {
                 isDragging = true;
                 startX = e.clientX - currentTranslateX;
@@ -1428,7 +1574,7 @@
                 if (isDragging) {
                     currentTranslateX = e.clientX - startX;
                     currentTranslateY = e.clientY - startY;
-                    svg.style.transform = 'translate(' + currentTranslateX + 'px, ' + currentTranslateY + 'px) scale(' + currentScale + ')';
+                    applyTransform();
                 }
             });
             
@@ -1441,9 +1587,12 @@
                 e.preventDefault();
                 const delta = e.deltaY > 0 ? 0.9 : 1.1;
                 currentScale *= delta;
-                currentScale = Math.max(0.1, Math.min(3, currentScale));
-                svg.style.transform = 'translate(' + currentTranslateX + 'px, ' + currentTranslateY + 'px) scale(' + currentScale + ')';
+                currentScale = Math.max(0.1, Math.min(5, currentScale));
+                applyTransform();
             });
+            
+            // Initialize zoom display
+            updateZoomDisplay();
         }
 
         // Show commit tooltip

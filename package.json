@@ -2,7 +2,7 @@
   "name": "git-viz-vscode",
   "displayName": "Git Viz",
   "description": "Horizontal Git repository visualization for VS Code and Cursor",
-  "version": "3.4.3",
+  "version": "3.5.0",
   "publisher": "kambei",
   "icon": "media/main-icon.png",
   "engines": {
