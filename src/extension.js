@@ -376,6 +376,26 @@ class GitService {
                 console.log('GitService: Getting diff from parent:', parentCommit);
                 
                 try {
+                    // First get the diff stats for accurate line counts
+                    const diffStats = await this.executeGitCommand(`git diff --numstat ${parentCommit} ${commitHash}`);
+                    console.log('GitService: Got diff stats:', diffStats);
+                    
+                    // Parse diff stats to get line counts
+                    const statsMap = new Map();
+                    if (diffStats && diffStats.trim()) {
+                        const statLines = diffStats.trim().split('\n');
+                        statLines.forEach(line => {
+                            const parts = line.split('\t');
+                            if (parts.length >= 3) {
+                                const fileName = parts[2];
+                                const added = parts[0] === '-' ? 0 : parseInt(parts[0]) || 0;
+                                const deleted = parts[1] === '-' ? 0 : parseInt(parts[1]) || 0;
+                                statsMap.set(fileName, { added, deleted });
+                            }
+                        });
+                    }
+                    
+                    // Now get the actual diff to determine file types
                     const diff = await this.executeGitCommand(`git diff ${parentCommit} ${commitHash}`);
                     console.log('GitService: Got diff, length:', diff.length);
                     
@@ -394,20 +414,53 @@ class GitService {
                                 // Extract file names from diff header
                                 const match = line.match(/diff --git a\/(.+) b\/(.+)/);
                                 if (match) {
+                                    const oldFile = match[1];
+                                    const newFile = match[2];
+                                    
+                                    // Determine file type based on diff header
+                                    let fileType = 'modified';
+                                    let icon = '📝';
+                                    
+                                    if (oldFile === '/dev/null') {
+                                        fileType = 'added';
+                                        icon = '➕';
+                                    } else if (newFile === '/dev/null') {
+                                        fileType = 'deleted';
+                                        icon = '❌';
+                                    }
+                                    
+                                    const fileName = newFile === '/dev/null' ? oldFile : newFile;
+                                    const stats = statsMap.get(fileName) || { added: 0, deleted: 0 };
+                                    
+                                    // If we couldn't detect from diff header, try to detect from stats
+                                    if (fileType === 'modified' && stats.added > 0 && stats.deleted === 0) {
+                                        fileType = 'added';
+                                        icon = '➕';
+                                    } else if (fileType === 'modified' && stats.added === 0 && stats.deleted > 0) {
+                                        fileType = 'deleted';
+                                        icon = '❌';
+                                    }
+                                    
                                     currentFile = {
-                                        name: match[2], // Use the "b" file name (new file)
-                                        type: 'modified',
-                                        icon: '📝',
-                                        linesAdded: 0,
-                                        linesDeleted: 0
+                                        name: fileName,
+                                        type: fileType,
+                                        icon: icon,
+                                        linesAdded: stats.added,
+                                        linesDeleted: stats.deleted
                                     };
-                                    console.log('GitService: Found file in diff:', currentFile.name);
+                                    console.log('GitService: Found file in diff:', currentFile.name, 'type:', currentFile.type, 'icon:', currentFile.icon, 'lines:', currentFile.linesAdded, '+', currentFile.linesDeleted, '-');
                                 }
                             } else if (line.startsWith('+++')) {
                                 // Extract file name from +++ line
                                 const fileName = line.replace('+++ b/', '').replace('+++ a/', '');
-                                if (currentFile) {
+                                if (currentFile && fileName !== '/dev/null') {
                                     currentFile.name = fileName;
+                                    // Update stats if we have them
+                                    const stats = statsMap.get(fileName);
+                                    if (stats) {
+                                        currentFile.linesAdded = stats.added;
+                                        currentFile.linesDeleted = stats.deleted;
+                                    }
                                     console.log('GitService: Updated file name from +++:', fileName);
                                 }
                             } else if (line.startsWith('---')) {
@@ -415,35 +468,26 @@ class GitService {
                                 const fileName = line.replace('--- a/', '').replace('--- b/', '');
                                 if (currentFile && fileName !== '/dev/null') {
                                     currentFile.name = fileName;
+                                    // Update stats if we have them
+                                    const stats = statsMap.get(fileName);
+                                    if (stats) {
+                                        currentFile.linesAdded = stats.added;
+                                        currentFile.linesDeleted = stats.deleted;
+                                    }
                                     console.log('GitService: Updated file name from ---:', fileName);
-                                }
-                            } else if (line.startsWith('+') && !line.startsWith('+++')) {
-                                // Added line
-                                if (currentFile) {
-                                    currentFile.linesAdded++;
-                                }
-                            } else if (line.startsWith('-') && !line.startsWith('---')) {
-                                // Deleted line
-                                if (currentFile) {
-                                    currentFile.linesDeleted++;
                                 }
                             } else if (line.startsWith('@@')) {
                                 // Hunk header - commit the current file if we have one
                                 if (currentFile && !fileChanges.find(f => f.name === currentFile.name)) {
-                                    // Determine file type based on changes
-                                    if (currentFile.linesAdded > 0 && currentFile.linesDeleted === 0) {
-                                        currentFile.type = 'added';
-                                        currentFile.icon = '➕';
-                                    } else if (currentFile.linesAdded === 0 && currentFile.linesDeleted > 0) {
-                                        currentFile.type = 'deleted';
-                                        currentFile.icon = '❌';
-                                    } else {
-                                        currentFile.type = 'modified';
-                                        currentFile.icon = '📝';
+                                    // Ensure we have at least 1 line for added/deleted files
+                                    if (currentFile.type === 'added' && currentFile.linesAdded === 0) {
+                                        currentFile.linesAdded = 1;
+                                    } else if (currentFile.type === 'deleted' && currentFile.linesDeleted === 0) {
+                                        currentFile.linesDeleted = 1;
                                     }
                                     
                                     fileChanges.push({ ...currentFile });
-                                    console.log('GitService: Added file change:', currentFile.name, 'type:', currentFile.type);
+                                    console.log('GitService: Added file change:', currentFile.name, 'type:', currentFile.type, 'lines:', currentFile.linesAdded, '+', currentFile.linesDeleted, '-');
                                     currentFile = null;
                                 }
                             }
@@ -451,18 +495,15 @@ class GitService {
                         
                         // Add any remaining file
                         if (currentFile && !fileChanges.find(f => f.name === currentFile.name)) {
-                            if (currentFile.linesAdded > 0 && currentFile.linesDeleted === 0) {
-                                currentFile.type = 'added';
-                                currentFile.icon = '➕';
-                            } else if (currentFile.linesAdded === 0 && currentFile.linesDeleted > 0) {
-                                currentFile.type = 'deleted';
-                                currentFile.icon = '❌';
-                            } else {
-                                currentFile.type = 'modified';
-                                currentFile.icon = '📝';
+                            // Ensure we have at least 1 line for added/deleted files
+                            if (currentFile.type === 'added' && currentFile.linesAdded === 0) {
+                                currentFile.linesAdded = 1;
+                            } else if (currentFile.type === 'deleted' && currentFile.linesDeleted === 0) {
+                                currentFile.linesDeleted = 1;
                             }
+                            
                             fileChanges.push(currentFile);
-                            console.log('GitService: Added final file change:', currentFile.name, 'type:', currentFile.type);
+                            console.log('GitService: Added final file change:', currentFile.name, 'type:', currentFile.type, 'lines:', currentFile.linesAdded, '+', currentFile.linesDeleted, '-');
                         }
                     } else {
                         console.log('GitService: Empty diff received');

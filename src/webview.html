@@ -236,6 +236,16 @@
             font-size: 10px;
         }
 
+        .tooltip-file-lines-added {
+            color: var(--vscode-gitDecoration-addedResourceForeground, #4CAF50); /* Green for additions */
+            font-weight: bold;
+        }
+
+        .tooltip-file-lines-deleted {
+            color: var(--vscode-gitDecoration-deletedResourceForeground, #F44336); /* Red for deletions */
+            font-weight: bold;
+        }
+
         .tooltip-file-added {
             color: var(--vscode-gitDecoration-addedResourceForeground);
         }
@@ -1633,12 +1643,31 @@
                 '<div class="tooltip-files-title">File Changes (' + fileChanges.length + '):</div>';
             
             fileChanges.forEach((file, index) => {
-                console.log('Webview: Processing file', index, ':', file);
                 const typeClass = 'tooltip-file-' + file.type;
+                
+                // Build line count HTML with proper colors
+                let lineCountHtml = '';
+                if (file.linesAdded > 0) {
+                    lineCountHtml += '<span class="tooltip-file-lines-added">+' + file.linesAdded + '</span>';
+                }
+                if (file.linesDeleted > 0) {
+                    if (lineCountHtml) lineCountHtml += ' ';
+                    lineCountHtml += '<span class="tooltip-file-lines-deleted">-' + file.linesDeleted + '</span>';
+                }
+                
+                // Use the file's icon, fallback to type-based icon, then generic icon
+                let iconToUse = file.icon;
+                if (!iconToUse) {
+                    if (file.type === 'added') iconToUse = '➕';
+                    else if (file.type === 'deleted') iconToUse = '❌';
+                    else if (file.type === 'modified') iconToUse = '📝';
+                    else iconToUse = '📄';
+                }
+                
                 fileChangesHtml += '<div class="tooltip-file">' +
-                    '<span class="tooltip-file-icon">' + (file.icon || '📄') + '</span>' +
+                    '<span class="tooltip-file-icon">' + iconToUse + '</span>' +
                     '<span class="tooltip-file-name ' + typeClass + '">' + (file.name || 'Unknown file') + '</span>' +
-                    '<span class="tooltip-file-stats">+' + (file.linesAdded || 0) + ' -' + (file.linesDeleted || 0) + '</span>' +
+                    '<span class="tooltip-file-stats">' + lineCountHtml + '</span>' +
                     '</div>';
             });
             
