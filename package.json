@@ -2,7 +2,7 @@
   "name": "git-viz-vscode",
   "displayName": "Git Viz",
   "description": "Horizontal Git repository visualization for VS Code and Cursor",
-  "version": "3.5.1",
+  "version": "3.5.2",
   "publisher": "kambei",
   "icon": "media/main-icon.png",
   "engines": {
@@ -17,7 +17,7 @@
     "onCommand:git-viz.zoomIn",
     "onCommand:git-viz.zoomOut"
   ],
-  "main": "./src/extension.js",
+  "main": "./out/extension.js",
   "contributes": {
     "iconThemes": [
       {
@@ -90,5 +90,21 @@
     "kambei"
   ],
   "author": "kambei",
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.0.0",
+    "@babel/preset-env": "^7.0.0",
+    "@types/node": "12.x",
+    "@types/vscode": "^1.40.0",
+    "babel-loader": "^8.0.0",
+    "vsce": "^2.15.0",
+    "webpack": "^5.102.1",
+    "webpack-cli": "^4.0.0"
+  }
 }

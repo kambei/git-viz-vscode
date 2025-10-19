@@ -24,7 +24,7 @@ A Visual Studio Code and Cursor extension for visualizing git repositories with 
 2. Press `F5` to open a new Extension Development Host window
 3. The extension will be loaded in the new window
 
-**Note**: This extension no longer requires Node.js as a prerequisite. It uses VS Code's built-in Git API instead of executing git commands directly.
+**Note**: This extension requires Git to be installed and available in your system PATH. It executes git commands directly to retrieve repository information.
 
 ## Usage
 
@@ -39,11 +39,12 @@ A Visual Studio Code and Cursor extension for visualizing git repositories with 
 ### Prerequisites
 
 - Visual Studio Code or Cursor
-- Git repository (the extension uses VS Code's built-in Git API)
+- Git installed and available in system PATH
+- Git repository (the extension executes git commands directly)
 
 ### Setup
 
-This extension is now written in pure JavaScript and uses VS Code's built-in Git API, so no build process or Node.js dependencies are required.
+This extension is written in pure JavaScript and executes git commands directly, so no build process or Node.js dependencies are required.
 
 1. Clone this repository
 2. Press `F5` to open a new Extension Development Host window
@@ -62,7 +63,7 @@ vsce package
 
 ## Configuration
 
-The extension automatically detects git repositories and provides visualization features based on the current workspace.
+The extension automatically detects git repositories and executes git commands to provide visualization features based on the current workspace.
 
 ## Contributing
 

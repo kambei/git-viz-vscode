@@ -1,0 +1,36 @@
+# Git files
+.git/**
+.gitignore
+
+# Node modules
+node_modules/**
+
+# Source maps (keep bundled files)
+out/*.map
+
+# Development files
+create-icon.js
+create-main-icon.js
+create-simple-icon.js
+test-webview.html
+webpack.config.js
+.babelrc
+
+# VSIX packages
+*.vsix
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/**
+.idea/**
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary files
+*.tmp
+*.temp
