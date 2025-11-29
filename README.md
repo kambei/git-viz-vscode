@@ -8,6 +8,7 @@ A Visual Studio Code and Cursor extension for visualizing git repositories with 
 - 🌳 **Branch Graph Display** - Visual representation of branch relationships
 - 📁 **File Change Tracking** - Track modifications across commits
 - 🔍 **Interactive Git Log** - Enhanced git log with visual elements
+- 🔭 **Zoom Controls** - Zoom in/out to adjust the view scale
 
 ## Installation
 
@@ -44,11 +45,13 @@ A Visual Studio Code and Cursor extension for visualizing git repositories with 
 
 ### Setup
 
-This extension is written in pure JavaScript and executes git commands directly, so no build process or Node.js dependencies are required.
+This extension uses Webpack and Babel for bundling.
 
 1. Clone this repository
-2. Press `F5` to open a new Extension Development Host window
-3. The extension will be loaded in the new window
+2. Run `npm install` to install dependencies
+3. Run `npm run watch` to start the build in watch mode
+4. Press `F5` to open a new Extension Development Host window
+5. The extension will be loaded in the new window
 
 ### Building
 
@@ -60,6 +63,9 @@ vsce package
 ## Commands
 
 - `Git Viz: Open` - Opens the Git Visualization panel
+- `Git Viz: Refresh` - Refreshes the repository view
+- `Git Viz: Zoom In` - Increases the view scale
+- `Git Viz: Zoom Out` - Decreases the view scale
 
 ## Configuration
 
